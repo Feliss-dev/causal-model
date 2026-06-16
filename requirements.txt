@@ -1,0 +1,13 @@
+numpy==2.4.6
+pandas==3.0.3
+tqdm==4.67.3
+requests==2.34.2
+neo4j==6.2.0
+streamlit==1.57.0
+plotly==6.7.0
+pyvis==0.3.2
+dowhy==0.14
+econml==0.16.0
+sentence-transformers==5.5.1
+torch==2.12.0
+torch-geometric==2.7.0

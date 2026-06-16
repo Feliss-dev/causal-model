@@ -1,0 +1,957 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Luồng xử lý CausalHeteroGNN</title>
+  <style>
+    :root {
+      --ink: #17202a;
+      --muted: #5f6b7a;
+      --line: #c9d3df;
+      --paper: #f7f9fc;
+      --panel: #ffffff;
+      --blue: #2f6fbd;
+      --green: #1f8a5b;
+      --orange: #b86219;
+      --red: #b43b48;
+      --violet: #6f55b5;
+      --shadow: 0 8px 24px rgba(22, 33, 54, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: Arial, Helvetica, sans-serif;
+      line-height: 1.45;
+    }
+
+    main {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 28px 22px 44px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      max-width: 980px;
+      margin: 0 0 22px;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 0 0 22px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 6px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .blue { background: var(--blue); }
+    .green { background: var(--green); }
+    .orange { background: var(--orange); }
+    .red { background: var(--red); }
+    .violet { background: var(--violet); }
+
+    .flow {
+      display: grid;
+      grid-template-columns: 1.05fr 1.15fr 1.55fr 1.2fr;
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .stage {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .stage-title {
+      padding: 10px 12px;
+      color: #fff;
+      background: #263647;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 15px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+
+    .card h2 {
+      margin: 0 0 8px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+
+    .card h3 {
+      margin: 12px 0 6px;
+      font-size: 14px;
+      color: var(--ink);
+    }
+
+    .card p {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .card ul {
+      margin: 8px 0 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .card li { margin: 4px 0; }
+
+    .node-row {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .node {
+      padding: 8px 6px;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 12px;
+      text-align: center;
+      font-weight: 700;
+      min-height: 36px;
+      display: grid;
+      place-items: center;
+    }
+
+    .post { background: var(--blue); }
+    .user { background: var(--green); }
+    .sub { background: var(--red); }
+    .domain { background: var(--orange); }
+    .image { background: var(--violet); }
+
+    .arrow {
+      position: relative;
+      min-height: 20px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+      padding-top: 2px;
+    }
+
+    .arrow::before {
+      content: "";
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      top: 9px;
+      height: 2px;
+      background: var(--line);
+      z-index: 0;
+    }
+
+    .arrow::after {
+      content: "";
+      position: absolute;
+      right: 7px;
+      top: 5px;
+      width: 10px;
+      height: 10px;
+      border-top: 2px solid var(--line);
+      border-right: 2px solid var(--line);
+      transform: rotate(45deg);
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .branch {
+      border: 2px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfe;
+    }
+
+    .branch.causal {
+      border-color: rgba(31, 138, 91, 0.45);
+      background: #f1fbf6;
+    }
+
+    .branch.spurious {
+      border-color: rgba(180, 59, 72, 0.38);
+      background: #fff6f7;
+    }
+
+    .branch h2 {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .pill {
+      display: inline-block;
+      padding: 3px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      color: #fff;
+      background: var(--green);
+      white-space: nowrap;
+    }
+
+    .pill.red { background: var(--red); }
+    .pill.blue { background: var(--blue); }
+
+    .mini-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .mini {
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .formula {
+      margin-top: 10px;
+      padding: 10px;
+      background: #f2f5f9;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+      color: #263647;
+      overflow-x: auto;
+    }
+
+    .metric-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      font-size: 12px;
+    }
+
+    .metric-table th,
+    .metric-table td {
+      border: 1px solid var(--line);
+      padding: 7px;
+      text-align: left;
+    }
+
+    .metric-table th {
+      background: #eef3f8;
+      color: #263647;
+    }
+
+    .callout {
+      margin-top: 18px;
+      padding: 14px;
+      background: #fff;
+      border-left: 5px solid var(--green);
+      border-radius: 6px;
+      box-shadow: var(--shadow);
+    }
+
+    .callout strong { color: var(--green); }
+
+    .details {
+      margin-top: 24px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .detail-section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 16px;
+    }
+
+    .detail-section h2 {
+      margin: 0 0 8px;
+      font-size: 20px;
+    }
+
+    .detail-section > p {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .io-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 13px;
+    }
+
+    .io-table th,
+    .io-table td {
+      border: 1px solid var(--line);
+      padding: 9px;
+      vertical-align: top;
+    }
+
+    .io-table th {
+      background: #eef3f8;
+      color: #263647;
+      text-align: left;
+    }
+
+    .steps {
+      counter-reset: step;
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfe;
+    }
+
+    .step::before {
+      counter-increment: step;
+      content: counter(step);
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--blue);
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .step h3 {
+      margin: 2px 0 4px;
+      font-size: 15px;
+    }
+
+    .step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 12px;
+    }
+
+    .note {
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid #d8e8de;
+      background: #f2fbf5;
+      color: #315d43;
+      font-size: 13px;
+    }
+
+    @media (max-width: 1100px) {
+      .flow {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (max-width: 760px) {
+      main { padding: 18px 12px 30px; }
+      h1 { font-size: 24px; }
+      .flow,
+      .split {
+        grid-template-columns: 1fr;
+      }
+      .node-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .two-col {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Luồng xử lý CausalHeteroGNN</h1>
+    <p class="lead">
+      Sơ đồ này mô tả mô hình đề xuất từ dữ liệu đầu vào đến đầu ra đánh giá. Ý tưởng chính:
+      dùng graph để khai thác ngữ cảnh quan hệ, nhưng cắt đường truyền Subreddit trong nhánh nhân quả
+      để tránh shortcut cộng đồng.
+    </p>
+
+    <div class="legend">
+      <span class="tag"><span class="dot blue"></span>Post / nội dung</span>
+      <span class="tag"><span class="dot green"></span>User</span>
+      <span class="tag"><span class="dot red"></span>Subreddit - confounder</span>
+      <span class="tag"><span class="dot orange"></span>Domain / nguồn tin</span>
+      <span class="tag"><span class="dot violet"></span>Image / CLIP</span>
+    </div>
+
+    <section class="flow" aria-label="CausalHeteroGNN pipeline">
+      <div class="stage">
+        <div class="stage-title">1. Đầu vào</div>
+        <article class="card">
+          <h2>Dữ liệu Fakeddit đã xử lý</h2>
+          <p>Mỗi mẫu là một bài đăng đa phương thức, gồm nội dung, ảnh và metadata xã hội.</p>
+          <ul>
+            <li>5,898 Post có ảnh thật</li>
+            <li>17,079 nút, 28,274 quan hệ</li>
+            <li>5 loại nút: Post, User, Subreddit, Domain, Image</li>
+          </ul>
+        </article>
+
+        <div class="arrow">biểu diễn thành graph</div>
+
+        <article class="card">
+          <h2>Đặc trưng nút</h2>
+          <ul>
+            <li><b>Post:</b> mpnet title embedding + score/upvote/comment + CLIPcons</li>
+            <li><b>Image:</b> CLIP ViT-B/32 embedding</li>
+            <li><b>User, Domain, Subreddit:</b> thống kê từ tập train</li>
+          </ul>
+          <div class="node-row">
+            <div class="node post">Post</div>
+            <div class="node user">User</div>
+            <div class="node sub">Subreddit</div>
+            <div class="node domain">Domain</div>
+            <div class="node image">Image</div>
+          </div>
+        </article>
+      </div>
+
+      <div class="stage">
+        <div class="stage-title">2. HeteroData</div>
+        <article class="card">
+          <h2>Quan hệ trong đồ thị</h2>
+          <p>Graph lưu ngữ cảnh xã hội quanh mỗi bài đăng.</p>
+          <ul>
+            <li>Post - POSTED_BY - User</li>
+            <li>Post - POSTED_IN - Subreddit</li>
+            <li>Post - LINKS_TO - Domain</li>
+            <li>Post - HAS_IMAGE - Image</li>
+            <li>User - MEMBER_OF - Subreddit</li>
+          </ul>
+        </article>
+
+        <div class="arrow">tạo hai luồng message passing</div>
+
+        <article class="card">
+          <h2>Vấn đề cần kiểm soát</h2>
+          <p>
+            Subreddit có thể mang lịch sử nhãn mạnh. Nếu GNN lan truyền trực tiếp qua quan hệ này,
+            mô hình dễ học quy tắc cộng đồng thay vì tín hiệu nội dung.
+          </p>
+          <div class="formula">
+            Shortcut: Post -> Subreddit -> label<br>
+            Mục tiêu: dùng graph nhưng chặn đường gây nhiễu này trong nhánh causal
+          </div>
+        </article>
+      </div>
+
+      <div class="stage">
+        <div class="stage-title">3. CausalHeteroGNN</div>
+        <article class="card">
+          <h2>Hai nhánh xử lý song song</h2>
+          <div class="split">
+            <section class="branch spurious">
+              <h2><span class="pill red">nhánh phụ</span></h2>
+              <p>Nhận graph gốc G với đầy đủ quan hệ.</p>
+              <ul>
+                <li>Thấy được Subreddit</li>
+                <li>Hấp thụ tín hiệu gây nhiễu</li>
+                <li>Dùng cho chẩn đoán shortcut</li>
+              </ul>
+              <div class="formula">G = đầy đủ edge types</div>
+            </section>
+
+            <section class="branch causal">
+              <h2><span class="pill">nhánh causal</span></h2>
+              <p>Nhận graph đã can thiệp G_causal.</p>
+              <ul>
+                <li>Cắt POSTED_IN liên quan Subreddit</li>
+                <li>Cắt MEMBER_OF liên quan Subreddit</li>
+                <li>Tập trung vào tín hiệu ổn định hơn</li>
+              </ul>
+              <div class="formula">
+                E_causal = {(u,v) in E:<br>
+                tau(u) != Subreddit and tau(v) != Subreddit}
+              </div>
+            </section>
+          </div>
+        </article>
+
+        <div class="arrow">mã hóa bằng Heterogeneous GraphSAGE</div>
+
+        <article class="card">
+          <h2>Bộ mã hóa và tách biểu diễn</h2>
+          <ul>
+            <li>Linear projection từng loại nút về hidden dim = 96</li>
+            <li>2 lớp Heterogeneous GraphSAGE</li>
+            <li>GRL alpha = 2.0 để giảm thông tin môi trường trong nhánh causal</li>
+            <li>Ràng buộc trực giao để tách causal/spurious representation</li>
+          </ul>
+          <div class="mini-grid">
+            <div class="mini"><b>h_s</b><br>biểu diễn nhánh phụ</div>
+            <div class="mini"><b>h_c</b><br>biểu diễn nhân quả</div>
+            <div class="mini"><b>GRL</b><br>đối kháng confounder</div>
+            <div class="mini"><b>Orthogonal</b><br>giảm trộn tín hiệu</div>
+          </div>
+        </article>
+      </div>
+
+      <div class="stage">
+        <div class="stage-title">4. Đầu ra</div>
+        <article class="card">
+          <h2>Đầu phân loại</h2>
+          <p>Mô hình sinh dự đoán thật/giả và các đầu phụ phục vụ huấn luyện.</p>
+          <ul>
+            <li>Binary classification: Fake / Real</li>
+            <li>Multi-class auxiliary head</li>
+            <li>Confounder classifier cho tín hiệu Subreddit</li>
+          </ul>
+          <div class="formula">
+            L = L_base + L_causal + L_spurious + L_adv + L_ortho
+          </div>
+        </article>
+
+        <div class="arrow">đánh giá OOD</div>
+
+        <article class="card">
+          <h2>Kết quả chính</h2>
+          <table class="metric-table">
+            <thead>
+              <tr>
+                <th>Kiểm tra</th>
+                <th>CausalHeteroGNN</th>
+                <th>Ý nghĩa</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Confounding-Shift</td>
+                <td>79.9±4.2%</td>
+                <td>Chống shortcut bị đảo</td>
+              </tr>
+              <tr>
+                <td>AUC</td>
+                <td>0.922</td>
+                <td>Phân biệt Fake/Real tốt</td>
+              </tr>
+              <tr>
+                <td>F1-drop</td>
+                <td>5.4%</td>
+                <td>Suy giảm thấp khi OOD</td>
+              </tr>
+              <tr>
+                <td>LOCO</td>
+                <td>69.4±5.4%</td>
+                <td>Gần MLP content-only</td>
+              </tr>
+              <tr>
+                <td>Worst-Group</td>
+                <td>56.0%</td>
+                <td>Ít sụp ở nhóm khó</td>
+              </tr>
+            </tbody>
+          </table>
+        </article>
+      </div>
+    </section>
+
+    <section class="callout">
+      <strong>Thông điệp chính:</strong>
+      MLP content-only cho biết năng lực nội dung thuần mạnh đến đâu; Baseline GNN cho thấy graph thô dễ học shortcut;
+      CausalHeteroGNN được đề xuất để giữ lợi ích của graph nhưng kiểm soát đường gây nhiễu từ Subreddit.
+    </section>
+
+    <section class="details" aria-label="Mô tả chi tiết từng bước">
+      <article class="detail-section">
+        <h2>1. Dữ liệu đầu vào ban đầu</h2>
+        <p>
+          Dữ liệu bắt đầu từ các bài đăng Fakeddit đa phương thức. Mỗi bài không chỉ có nội dung,
+          mà còn đi kèm ngữ cảnh xã hội và nguồn tin.
+        </p>
+        <table class="io-table">
+          <thead>
+            <tr>
+              <th>Thành phần</th>
+              <th>Đầu vào</th>
+              <th>Ý nghĩa</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Văn bản</td>
+              <td>Tiêu đề bài đăng</td>
+              <td>Tín hiệu ngữ nghĩa chính để phân biệt Fake/Real.</td>
+            </tr>
+            <tr>
+              <td>Hình ảnh</td>
+              <td>Ảnh đi kèm bài đăng</td>
+              <td>Bổ sung tín hiệu thị giác và nhất quán văn bản-hình ảnh.</td>
+            </tr>
+            <tr>
+              <td>User</td>
+              <td>Tài khoản đăng bài</td>
+              <td>Ngữ cảnh hành vi của người đăng.</td>
+            </tr>
+            <tr>
+              <td>Subreddit</td>
+              <td>Cộng đồng đăng tải</td>
+              <td>Ngữ cảnh xã hội, đồng thời là biến gây nhiễu chính.</td>
+            </tr>
+            <tr>
+              <td>Domain</td>
+              <td>Nguồn/link bài viết</td>
+              <td>Tín hiệu về độ tin cậy nguồn tin.</td>
+            </tr>
+            <tr>
+              <td>Metadata</td>
+              <td>Score, upvote ratio, số bình luận</td>
+              <td>Phản ứng xã hội quanh bài đăng.</td>
+            </tr>
+            <tr>
+              <td>Label</td>
+              <td>Fake/Real</td>
+              <td>Nhãn huấn luyện và đánh giá.</td>
+            </tr>
+          </tbody>
+        </table>
+      </article>
+
+      <article class="detail-section">
+        <h2>2. Tiền xử lý và tạo đặc trưng</h2>
+        <p>
+          Bước này chuyển dữ liệu thô thành các bảng node, edge và vector đặc trưng để mô hình graph sử dụng.
+        </p>
+        <table class="io-table">
+          <thead>
+            <tr>
+              <th>Bước xử lý</th>
+              <th>Đầu vào</th>
+              <th>Đầu ra</th>
+              <th>Ý nghĩa</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Làm sạch Post</td>
+              <td>Title, metadata, label</td>
+              <td>posts_enriched.csv</td>
+              <td>Chuẩn hóa thông tin bài đăng và split train/val/test.</td>
+            </tr>
+            <tr>
+              <td>Trích xuất text</td>
+              <td>Tiêu đề bài đăng</td>
+              <td>mpnet embedding 768 chiều</td>
+              <td>Biểu diễn ngữ nghĩa văn bản.</td>
+            </tr>
+            <tr>
+              <td>Trích xuất image</td>
+              <td>Ảnh bài đăng</td>
+              <td>CLIP image embedding</td>
+              <td>Biểu diễn thị giác.</td>
+            </tr>
+            <tr>
+              <td>Tính CLIPcons</td>
+              <td>CLIP text embedding + CLIP image embedding</td>
+              <td>Cosine similarity text-image</td>
+              <td>Đo mức nhất quán giữa nội dung văn bản và hình ảnh.</td>
+            </tr>
+            <tr>
+              <td>Thống kê node</td>
+              <td>User, Subreddit, Domain từ tập train</td>
+              <td>users/subreddits/domains_enriched.csv</td>
+              <td>Bổ sung ngữ cảnh hành vi, cộng đồng và nguồn tin.</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="formula">Post feature = mpnet(768) + score/upvote/comment(3) + CLIPcons(1) = 772 chiều</div>
+      </article>
+
+      <article class="detail-section">
+        <h2>3. Xây dựng HeteroData</h2>
+        <p>
+          Các bảng đã xử lý được chuyển thành đồ thị dị thể trong PyTorch Geometric.
+        </p>
+        <div class="two-col">
+          <div>
+            <h3>Node types</h3>
+            <table class="io-table">
+              <tbody>
+                <tr><td>Post</td><td>Bài đăng cần phân loại.</td></tr>
+                <tr><td>User</td><td>Người đăng bài.</td></tr>
+                <tr><td>Subreddit</td><td>Cộng đồng đăng tải.</td></tr>
+                <tr><td>Domain</td><td>Nguồn tin hoặc đường dẫn.</td></tr>
+                <tr><td>Image</td><td>Ảnh gắn với bài đăng.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div>
+            <h3>Edge types</h3>
+            <table class="io-table">
+              <tbody>
+                <tr><td>POSTED_BY</td><td>Post nối với User.</td></tr>
+                <tr><td>POSTED_IN</td><td>Post nối với Subreddit.</td></tr>
+                <tr><td>LINKS_TO</td><td>Post nối với Domain.</td></tr>
+                <tr><td>HAS_IMAGE</td><td>Post nối với Image.</td></tr>
+                <tr><td>MEMBER_OF</td><td>User nối với Subreddit.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <p class="note">
+          Đầu ra của bước này là <b>x_dict</b> chứa đặc trưng từng loại node và <b>edge_index_dict</b>
+          chứa quan hệ giữa các node. Đây là đầu vào trực tiếp của Heterogeneous GraphSAGE.
+        </p>
+      </article>
+
+      <article class="detail-section">
+        <h2>4. Cơ chế hai nhánh của CausalHeteroGNN</h2>
+        <p>
+          Mô hình không dùng graph một cách nguyên xi. Nó tách quá trình xử lý thành một nhánh phụ trên graph gốc
+          và một nhánh causal trên graph đã can thiệp.
+        </p>
+        <table class="io-table">
+          <thead>
+            <tr>
+              <th>Nhánh</th>
+              <th>Đầu vào</th>
+              <th>Đầu ra</th>
+              <th>Ý nghĩa</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Nhánh phụ</td>
+              <td>Graph gốc G với đầy đủ quan hệ, gồm cả Subreddit.</td>
+              <td>Biểu diễn h_s.</td>
+              <td>Hấp thụ và nhận diện phần tín hiệu gây nhiễu/spurious.</td>
+            </tr>
+            <tr>
+              <td>Nhánh causal</td>
+              <td>Graph G_causal đã loại bỏ các cạnh chạm Subreddit.</td>
+              <td>Biểu diễn h_c.</td>
+              <td>Tập trung vào tín hiệu ổn định hơn để dự đoán chính.</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="formula">
+          Gốc: G = (V, E)<br>
+          Can thiệp: E_causal = {(u,v) in E : type(u) != Subreddit and type(v) != Subreddit}
+        </div>
+      </article>
+
+      <article class="detail-section">
+        <h2>5. Mã hóa và huấn luyện</h2>
+        <p>
+          Cả hai nhánh đều đi qua Heterogeneous GraphSAGE, sau đó được tối ưu bằng các mục tiêu phân loại,
+          đối kháng và tách biểu diễn.
+        </p>
+        <div class="steps">
+          <div class="step">
+            <div>
+              <h3>Chiếu đặc trưng node</h3>
+              <p>Mỗi loại node có Linear projection riêng để đưa về cùng hidden dimension = 96.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h3>Message passing</h3>
+              <p>Hai lớp Heterogeneous GraphSAGE tổng hợp thông tin theo từng loại quan hệ.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h3>GRL</h3>
+              <p>Gradient Reversal Layer làm cho biểu diễn causal khó mã hóa thông tin Subreddit.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h3>Ràng buộc trực giao</h3>
+              <p>Khuyến khích h_s và h_c khác nhau, giảm trộn tín hiệu gây nhiễu vào nhánh causal.</p>
+            </div>
+          </div>
+        </div>
+        <table class="io-table">
+          <thead>
+            <tr>
+              <th>Loss</th>
+              <th>Ý nghĩa</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>L_base,2w</td><td>Phân loại Fake/Real ở nhánh phụ.</td></tr>
+            <tr><td>L_base,6w</td><td>Phân loại 6-way phụ ở nhánh phụ.</td></tr>
+            <tr><td>L_causal,2w</td><td>Phân loại Fake/Real ở nhánh causal.</td></tr>
+            <tr><td>L_causal,6w</td><td>Phân loại 6-way phụ ở nhánh causal.</td></tr>
+            <tr><td>L_spurious</td><td>Buộc nhánh phụ học tín hiệu Subreddit.</td></tr>
+            <tr><td>L_adv</td><td>Giảm thông tin Subreddit trong biểu diễn causal.</td></tr>
+            <tr><td>L_ortho</td><td>Tách biệt không gian biểu diễn phụ và causal.</td></tr>
+          </tbody>
+        </table>
+      </article>
+
+      <article class="detail-section">
+        <h2>6. Inference và đầu ra cuối cùng</h2>
+        <p>
+          Khi dự đoán, đầu ra chính được lấy từ nhánh causal vì đây là nhánh đã được kiểm soát shortcut cộng đồng.
+        </p>
+        <div class="steps">
+          <div class="step">
+            <div>
+              <h3>Nhận bài test</h3>
+              <p>Lấy đặc trưng Post, Image, User, Domain, Subreddit và các cạnh liên quan trong graph.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h3>Tạo graph causal</h3>
+              <p>Loại bỏ các cạnh liên quan đến Subreddit trong nhánh causal.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h3>Chạy HeteroGraphSAGE</h3>
+              <p>Sinh embedding h_c cho Post cần dự đoán.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h3>Phân loại</h3>
+              <p>Trả về xác suất Fake/Real và nhãn dự đoán cuối cùng.</p>
+            </div>
+          </div>
+        </div>
+        <table class="io-table">
+          <thead>
+            <tr>
+              <th>Đầu ra</th>
+              <th>Ý nghĩa</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>P(Fake)</td><td>Xác suất bài đăng là tin giả.</td></tr>
+            <tr><td>P(Real)</td><td>Xác suất bài đăng là tin thật.</td></tr>
+            <tr><td>Nhãn dự đoán</td><td>Fake hoặc Real.</td></tr>
+            <tr><td>h_c</td><td>Biểu diễn nhân quả của bài đăng, dùng cho phân tích/giải thích.</td></tr>
+          </tbody>
+        </table>
+      </article>
+
+      <article class="detail-section">
+        <h2>7. Các tầng đánh giá và ý nghĩa</h2>
+        <p>
+          Mô hình được đánh giá bằng nhiều giao thức để kiểm tra không chỉ Accuracy, mà cả khả năng chống shortcut.
+        </p>
+        <table class="io-table">
+          <thead>
+            <tr>
+              <th>Đánh giá</th>
+              <th>Dữ liệu test</th>
+              <th>Đầu ra</th>
+              <th>Ý nghĩa</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Standard OOD</td>
+              <td>Held-out subreddit</td>
+              <td>OOD Acc, F1, AUC</td>
+              <td>Kiểm tra cộng đồng chưa thấy.</td>
+            </tr>
+            <tr>
+              <td>Confounding-Shift</td>
+              <td>Subreddit tổng hợp bị đảo tương quan</td>
+              <td>OOD Acc, AUC, F1-drop</td>
+              <td>Kiểm tra mô hình có học shortcut cộng đồng không.</td>
+            </tr>
+            <tr>
+              <td>LOCO</td>
+              <td>Cộng đồng tự nhiên được giữ ra</td>
+              <td>Acc, F1, AUC</td>
+              <td>Kiểm tra khả năng tổng quát sang cộng đồng mới thật.</td>
+            </tr>
+            <tr>
+              <td>Temporal</td>
+              <td>Train cũ, test mới</td>
+              <td>Acc, F1, AUC</td>
+              <td>Kiểm tra dịch chuyển theo thời gian và prior shift.</td>
+            </tr>
+            <tr>
+              <td>Worst-Group</td>
+              <td>Nhóm env x label</td>
+              <td>Worst-group accuracy</td>
+              <td>Kiểm tra nhóm khó nhất có bị sụp không.</td>
+            </tr>
+            <tr>
+              <td>LFR</td>
+              <td>Can thiệp đổi Subreddit/Domain/Image</td>
+              <td>Label-Flip Rate</td>
+              <td>Đo độ nhạy của dự đoán với can thiệp phản thực tế.</td>
+            </tr>
+            <tr>
+              <td>FastRP leakage</td>
+              <td>Có/không đặc trưng FastRP</td>
+              <td>Chênh lệch OOD</td>
+              <td>Kiểm tra nguy cơ rò rỉ cấu trúc làm đẹp giả kết quả.</td>
+            </tr>
+          </tbody>
+        </table>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

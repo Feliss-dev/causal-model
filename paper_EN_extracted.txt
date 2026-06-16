@@ -1,0 +1,113 @@
+Causal Graph Disentanglement with Heterogeneous GraphSAGE for Multimodal Misinformation Detection
+Author Name
+University / Institution, Address, Country
+Abstract. Heterogeneous Graph Neural Networks (HGNNs) represent a powerful approach to multimodal misinformation detection by simultaneously modeling multiple entity and relation types. However, current models often exploit spurious correlations rather than learning invariant causal mechanisms, leading to performance degradation under data distribution shifts. In datasets such as Fakeddit, this manifests as reliance on community-level label distribution history (Subreddit), a strong confounding signal that does not reflect genuine content semantics. To address this problem, this study proposes CausalHeteroGNN, an architecture grounded in Structural Causal Models (SCM) with a graph-level backdoor adjustment mechanism that removes confounding information pathways. We further identify a label leakage phenomenon from FastRP structural features that can substantially bias OOD evaluation results. On the Confounding-Shift Benchmark, CausalHeteroGNN achieves 74.2% OOD accuracy, outperforming Baseline GNN (36.4%), IRM (54.1%), and EERM (59.6%), while maintaining a Label-Flip Rate (LFR) of ~0.0% under community-swap interventions. Experimental results demonstrate that direct structural constraints on the graph constitute a promising direction for improving the generalizability of misinformation detection systems in shifting data environments.
+Keywords: HGNNs, SCM, Multimodal Misinformation Detection, GraphSAGE.
+1. Introduction
+The proliferation of multimedia communication has given rise to increasingly sophisticated forms of misinformation, posing significant challenges to automated detection systems. By virtue of their capacity to model multiple entity types and relationships within a unified data structure, Heterogeneous Graph Neural Networks (HGNNs) have emerged as an effective approach to this problem. Nevertheless, the majority of current models primarily learn statistical correlations present in training data rather than the mechanisms that determine the veracity of information. As a consequence, models tend to rely on environment-specific signals and suffer performance degradation when encountering communities or contexts not seen during training.
+From a causal inference perspective, this phenomenon can be explained by the presence of confounding variables in the data structure. In datasets such as Fakeddit, the community label distribution history (Subreddit) often exhibits a strong correlation with post labels, forming a shortcut path between content and predicted labels. Through graph message passing, HGNNs tend to amplify these signals and learn environment-dependent patterns instead of causally invariant features. The critical question is therefore not how accurately the model performs on observed data, but whether the model maintains predictive capacity when community signals are altered or completely reversed. Although many studies have evaluated Out-of-Distribution (OOD) generalizability by withholding certain communities for test phases, these protocols are insufficient for distinguishing models that genuinely learn causal signals from those exploiting spurious correlations. To address this limitation, this study proposes a novel causal architecture along with a more rigorous evaluation protocol under confounding-shift conditions.
+To address the above limitations, this study makes three main contributions: (1) proposes CausalHeteroGNN, a multimodal HGNN architecture based on SCM with a structural backdoor adjustment mechanism to directly eliminate the influence of confounding variables; (2) constructs the Confounding-Shift Benchmark, an OOD evaluation protocol under reversed confounder-label correlation conditions, enabling testing of a model’s ability to learn invariant signals; and (3) identifies the risk of label leakage from FastRP features in inductive graph learning settings, thereby proposing a leakage-free evaluation procedure to ensure the reliability of experimental results.
+2. Background and Related Works
+Research on multimodal misinformation detection demonstrates that simultaneously integrating content and relational structural information significantly improves the recognition of misleading information. SAFE [12] exploits semantic consistency between text and images; BiGCN [11] models information propagation through diffusion tree structures; KGAT [14] enhances verification by integrating external knowledge from knowledge graphs; while Heterogeneous Graph Neural Networks (HGNNs) [4] allow simultaneous representation of multiple entity and relation types in a shared learning space. Despite achieving high performance on standard benchmarks, most existing studies are evaluated under settings where test data originates from the same domain as training data, leaving the generalizability under changing community structures and data environments unsystematically explored.
+From a causal inference standpoint, Pearl [2] shows that distinguishing correlation from causation requires intervention and backdoor adjustment mechanisms to eliminate confounding variable effects. Building on this foundation, Schölkopf and Peters [6,9] argue that model generalizability depends on whether it has learned invariant mechanisms across multiple environments, rather than relying on correlation patterns specific to training data. Methods such as IRM and EERM [13] instantiate this idea by searching for stable representations across multiple environments or minimizing risk differences across environments constructed through graph perturbations. However, these methods still rely on soft regularization constraints, which only attenuate dependence on confounding signals rather than directly removing the confounding source from the representation learning process. When the correlation between confounder and label remains sufficiently strong, models may continue to exploit these signals to optimize in-distribution performance, thereby degrading generalizability in distribution-shift scenarios.
+3. Data Collection and Representation in Neo4J
+To efficiently manage and exploit a multimodal heterogeneous information network, this study employs Neo4j [15] as the graph storage and querying platform. Neo4j enables intuitive representation of heterogeneous entities and relationships while supporting structural analysis operations that serve causal model construction.
+The primary data source is Fakeddit [1], a large-scale benchmark collected from Reddit during 2008–2020, comprising over one million posts with labeled text and image data. To ensure successful experimentation on limited infrastructure, this study performs training on 5,898 post samples; after graph modeling, the dataset yields 17,079 nodes and 28,274 relationships.
+All data is represented as a property graph in Neo4j, consisting of five node types: Post, User, Subreddit, Domain, and Image; together with five directed relationship types: POSTED_BY, POSTED_IN, LINKS_TO, HAS_IMAGE, and MEMBER_OF (Fig. 1). The final graph comprises 5,898 Post nodes, 4,604 User nodes, 658 Domain nodes, 21 Subreddit nodes, and 5,898 Image nodes. Organizing data in graph form enables integrity verification via Cypher and directly supports graph-based analysis and representation learning steps.
+Fig. 1. Fakeddit data representation as a property graph in Neo4j.
+To evaluate OOD generalizability, two communities—r/neutralnews and r/theonion—are completely excluded from training and validation, then used as the OOD test set. Accordingly, the training set comprises 5,000 posts (2,500 real and 2,500 fake), the validation set 400 posts, and the test set 498 posts, including 298 OOD samples. The validation set is used solely for hyperparameter selection, while the test set is reserved for final evaluation.
+After preprocessing, each post is converted into a PyTorch Geometric HeteroData object. Post features include semantic information from titles extracted by all-mpnet-base-v2, graph structural features (FastRP), and statistical attributes such as score, upvote ratio, and comment count. Image features are extracted using CLIP ViT-B/32, while User, Subreddit, and Domain nodes are described by behavioral indices and aggregated statistical measures. To prevent label leakage, all behavioral features are computed exclusively from the training set. This graph representation serves as input to the CausalHeteroGNN model with a HeteroGraphSAGE backbone.
+4. Proposed Graph Convolutional Neural Network with GraphSAGE
+CausalHeteroGNN is designed with a parallel architecture in which Heterogeneous GraphSAGE serves as a shared foundational encoder for two branches: the Baseline branch receives the original graph G with all relationships intact, and the Causal branch receives the intervened graph G_causal from which all edges connected to Subreddit nodes have been removed. The two representations are disentangled via a Gradient Reversal Layer (GRL) and orthogonality constraints, then fed into binary and multi-class classification heads.
+Fig. 2. CausalHeteroGNN architecture: structural backdoor intervention removes Subreddit edges to produce the causal graph G_causal; the Causal and Baseline branches are encoded in parallel, disentangled by a Gradient Reversal Layer (GRL, α = 2.0) and orthogonality constraints, under a multi-objective loss function targeting robust OOD prediction.
+Since different node types have distinct feature spaces, each type is projected into a shared latent space d = 96 via independent linear transformations, followed by ReLU and dropout p = 0.4. Two Heterogeneous GraphSAGE layers then perform message passing over each relation type r ∈ R: each node’s new representation is a combination of its current state with the mean representation of its relevant neighbors, enabling learning of both local features and multi-relational context.
+To eliminate the influence of the posting community as a confounding factor, backdoor adjustment is performed by directly intervening on the graph structure. Specifically, in the causal graph branch, all Subreddit nodes are removed:
+E_causal = { (u,v) ∈ E : τ(u) ≠ Subreddit ∧ τ(v) ≠ Subreddit }
+This operation is equivalent to blocking the backdoor path X ← C₁ → Y, enabling the causal representation to focus on stable content features. To reduce indirect leakage, a Gradient Reversal Layer (GRL) with α = 2.0 and an orthogonality constraint between the two branch representation spaces are added.
+Training simultaneously optimizes predictive capability, invariance, and confounding signal elimination:
+L = L_base,2w + 0.5·L_base,6w + L_causal,2w + 0.5·L_causal,6w + 0.5·L_spurious + 0.5·L_adv + 0.2·L_ortho
+where L_base and L_causal are the classification losses (binary and multi-class) of the two branches; L_spurious models confounding signals; L_adv is the adversarial component from GRL; and L_ortho encourages separation of causal and non-causal representations.
+5. Experiments
+5.1. OOD Evaluation Protocol Setup
+This study employs two evaluation protocols. (i) Held-Out-Domain (Subreddit) OOD [10]: r/neutralnews and r/theonion are withheld for testing, without intentional modification of the confounder-label relationship. (ii) Confounding-Shift Benchmark: the actual Subreddit is replaced by a synthetic binary confounding variable (spur_fakebias, spur_realbias); each post is assigned according to its true label with probability ρ. The training/seen phase uses ρ = 0.9 (strong correlation); the OOD phase uses ρ = 0.1 (reversed), creating a ColoredMNIST-style shift [8, 10] that forces models to rely on stable signals.
+5.2. Evaluation Criteria
+CausalHeteroGNN is compared against three baseline methods: Baseline GNN (HeteroGraphSAGE on the original graph without noise handling), IRM (learning invariant features across Subreddit environments, λ = 100), and EERM (using 3 virtual environments generated by random edge perturbation with a maximum probability of 0.3). To ensure fairness, all models use the same HeteroGraphSAGE architecture, number of layers, hidden size, and training procedure. Performance is evaluated using Accuracy, Macro-F1, AUC, and Label-Flip Rate (LFR) metrics.
+5.3. Main Results
+On the Held-Out-Domain (Subreddit) protocol, all methods achieve comparable performance (56.9%–60.9%), indicating that this protocol does not provide sufficient pressure to reveal differences in noise-handling strategies. In contrast, on Confounding-Shift, the gap becomes pronounced (Table 1, Fig. 3).
+Table 1. Classification performance on two OOD protocols. The Seen Acc column and Confounding-Shift columns are taken from the ρ = 0.9 → 0.1 setting.
+Model
+Seen Acc
+Held-Out OOD
+Conf-Shift OOD
+AUC
+F1 Drop
+Baseline GNN
+90.8±0.6
+58.4
+36.4±8.1
+0.314
+63.3%
+IRM
+91.2±0.2
+57.1
+54.1±4.7
+0.524
+43.2%
+EERM
+93.2±0.2
+60.9
+59.6±1.1
+0.694
+38.6%
+CausalHeteroGNN
+83.8±0.5
+56.9
+74.2±3.6
+0.851
+12.7%
+Baseline GNN achieves 90.8% in-distribution accuracy but collapses to 36.4% (AUC 0.314 < 0.5) when community correlation is reversed, demonstrating that its decision boundary is systematically inverted. IRM and EERM improve OOD performance (54.1% and 59.6%) but still trail CausalHeteroGNN by 14.6 percentage points and 0.157 AUC respectively. Notably, CausalHeteroGNN has lower Seen Acc (83.8%) but a Macro-F1 drop of only 12.7%—consistent with the hypothesis that restricting exploitation of community signals trades short-term performance for OOD robustness.
+Fig. 3. Comparison of OOD accuracy between the Held-Out-Subreddit and Confounding-Shift protocols.
+Fig. 4. Summary dashboard of main results across two OOD protocols. Metrics are averaged over three seeds. Held-Out-Subreddit shows comparable performance across models, while Confounding-Shift reveals the degradation of Baseline GNN and the advantages of CausalHeteroGNN in OOD Accuracy, AUC, Macro-F1 Drop, and Seen-OOD gap.
+5.4 FastRP Feature Leakage Analysis
+When retaining FastRP features in GNN inputs, both Baseline and CausalHeteroGNN achieve OOD accuracies of 93.6% ± 1.7% and 94.3% ± 1.9% respectively, with AUC ≈ 0.980 and F1-drop near zero (−0.1%)—results that appear ideal but are in fact the product of label leakage. Analysis reveals that FastRP is computed by Neo4j GDS over the entire graph prior to train–test splitting, so global structural information (correlated with community and labels) is indirectly encoded into the 64-dimensional input vectors of each OOD post, enabling the GNN to correctly classify by structural cluster rather than content. When FastRP is removed to ensure a truly inductive setting (text embedding + scalar features only), OOD performance drops to 61.0% ± 2.1% (Baseline) and 61.1% ± 1.6% (CausalHeteroGNN), with corresponding AUC falling to 0.630 and F1-drop rising to 25.1% and 25.2%—accurately reflecting the true difficulty of the task. The gap between the two configurations reaches +32.7 percentage points (Baseline) and +33.2 percentage points (Causal), demonstrating that all OOD performance gains when using FastRP stem from structural leakage, not genuine model generalizability.
+Fig. 5. Impact of FastRP structural feature leakage on OOD results.
+5.5 Structural Intervention Analysis via Label-Flip Rate (LFR)
+This study performs do(·) interventions on the causal graph and measures the rate of model prediction changes (Label-Flip Rate).
+Table 2. Label-Flip Rate (LFR) under structural interventions.
+Intervention
+LFR Baseline
+LFR Causal
+Interpretation
+do(C₁ = swap)
+30.1%
+~0.0%
+Community information swap
+do(I = ∅)
+4.0%
+8.0%
+Remove image features
+do(D = credible)
+6.2%
+15.5%
+Change source credibility
+The Baseline responds strongly to community swapping (30.1%), while the causal branch is completely invariant (0.0%)—consistent with Subreddit edge removal. In exchange, the causal branch is more sensitive to image interventions (4.0% → 8.0%) and source credibility (6.2% → 15.5%), indicating that after reducing community dependence, the model relies more heavily on content and source information.
+6 Conclusion
+This study proposed CausalHeteroGNN, a causally-oriented Heterogeneous GraphSAGE model for multimodal misinformation detection. By identifying the Subreddit as a confounding variable and removing Subreddit-related information pathways in the causal branch, the model limits the learning of spurious community correlations.
+Results on the Confounding-Shift Benchmark demonstrate that CausalHeteroGNN achieves 74.2% OOD Accuracy, surpassing Baseline GNN (36.4%), IRM (54.1%), and EERM (59.6%). The model also achieves an AUC of 0.851 and reduces Macro-F1 Drop to 12.7%, indicating more robust generalizability when the correlation between community and label is reversed.
+This study further demonstrates that FastRP can cause information leakage in OOD evaluation when computed over the entire graph prior to train–test splitting. Future work may extend to larger datasets, improve multi-class classification, and develop the BI dashboard into a tool for model analysis and auditing.
+References
+Nakamura, K., Levy, S., Wang, W.Y.: r/Fakeddit: A new multimodal benchmark dataset for fine-grained fake news detection. In: Proc. 12th Lang. Resour. Eval. Conf. (LREC), pp. 6149–6157. Marseille, France (2020).
+Pearl, J.: Causality: Models, Reasoning, and Inference, 2nd edn. Cambridge Univ. Press, Cambridge, U.K. (2009).
+Hamilton, W.L., Ying, R., Leskovec, J.: Inductive representation learning on large graphs. In: Advances in Neural Information Processing Systems (NeurIPS), pp. 1024–1034 (2017).
+Hu, Z., Dong, Y., Wang, K., Sun, Y.: Heterogeneous graph transformer. In: Proc. Web Conf. (WWW), pp. 2704–2710 (2020).
+Ganin, Y., et al.: Domain-adversarial training of neural networks. J. Mach. Learn. Res. 17(59), 1–35 (2016).
+Schölkopf, B.: Causality for machine learning. In: Probabilistic and Causal Inference: The Works of Judea Pearl, pp. 765–804. ACM, New York, NY, USA (2022).
+Ying, R., Bourgeois, D., You, J., Zitnik, M., Leskovec, J.: GNNExplainer: Generating explanations for graph neural networks. In: Advances in Neural Information Processing Systems (NeurIPS), pp. 9240–9251 (2019).
+Arjovsky, M., Bottou, L., Gulrajani, I., Lopez-Paz, D.: Invariant risk minimization. arXiv:1907.02893 (2019).
+Peters, J., Janzing, D., Schölkopf, B.: Elements of Causal Inference: Foundations and Learning Algorithms. MIT Press, Cambridge, MA, USA (2017).
+Gulrajani, I., Lopez-Paz, D.: In search of lost domain generalization. In: Proc. Int. Conf. Learn. Representations (ICLR) (2021).
+Bian, T., Xiao, X., Xu, T., Zhao, P., Huang, W., Rong, Y., Huang, J.: Rumor detection on social media with bi-directional graph convolutional networks. In: Proc. AAAI Conf. Artif. Intell., vol. 34, no. 01, pp. 549–556 (2020).
+Zhou, X., Wu, J., Zafarani, R.: SAFE: Similarity-aware multi-modal fake news detection. In: Proc. Pacific-Asia Conf. Knowl. Discovery Data Mining (PAKDD), pp. 354–367 (2020).
+Wu, Q., Zhang, H., Yan, J., Wipf, D.: Handling distribution shifts on graphs: An invariance perspective. In: Proc. Int. Conf. Learn. Representations (ICLR) (2022).
+Liu, Z., Xiong, C., Sun, M., Liu, Z.: Fine-grained fact verification with kernel graph attention network. In: Proc. 58th Annu. Meeting Assoc. Comput. Linguistics (ACL), pp. 7342–7351 (2020).
+Robinson, I., Webber, J., Eifrem, E.: Graph Databases: New Opportunities for Connected Data, 2nd edn. O’Reilly Media, Sebastopol, CA, USA (2015).

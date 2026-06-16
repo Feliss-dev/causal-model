@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "D:\B_Learn_IT_on_Tube\Teacher_PA\DE_TAI_BAO_FAIR\Fakeddit\pipeline\08_baselines_irm_eerm.py", line 436, in <module>
+    main()
+  File "D:\B_Learn_IT_on_Tube\Teacher_PA\DE_TAI_BAO_FAIR\Fakeddit\pipeline\08_baselines_irm_eerm.py", line 372, in main
+    user_feat_dim, domain_feat_dim, post_feat_dim = build_heterodata()
+                                                    ^^^^^^^^^^^^^^^^^^
+  File "D:\B_Learn_IT_on_Tube\Teacher_PA\DE_TAI_BAO_FAIR\Fakeddit\pipeline\06_train_gnn.py", line 326, in build_heterodata
+    print("\u0110\u1ecdc enriched datasets...")
+  File "C:\Users\minhthanh\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-1: character maps to <undefined>
