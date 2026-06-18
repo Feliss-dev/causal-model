@@ -36,13 +36,19 @@ def calibrate_temperature(logits: torch.Tensor, labels: torch.Tensor,
 
 def mask_post_edges(edge_index_dict, post_ids_to_mask: set):
     """
-    Remove all edges incident on the given Post node indices.
+    [TU XAY] Xoa tat ca canh cua cac Post node trong tap test.
 
-    Simulates inductive (content-only) evaluation: masked nodes are classified
-    from their own pre-computed features (text + CLIP + scalars) without
-    aggregating neighbourhood context from the graph. This eliminates the
-    transductive shortcut where a Post node in a pure-label subreddit trivially
-    inherits its label via message-passing from its Subreddit/User neighbours.
+    Muc dich: Inductive evaluation (strict content-only).
+    Post test duoc phan loai chi tu feature rieng (text+CLIP+scalar),
+    KHONG nhan message tu hang xom (Subreddit, User, Domain, Image).
+
+    Ly do can thiet: Trong transductive setting (full graph), Post thuoc
+    subreddit "theonion" co the nhan message tu Subreddit node (fake_ratio=1.0)
+    -> model chi can xem subreddit la biet Fake/Real ma khong can doc noi dung.
+    Sau khi mask canh: model THAT SU phan loai theo noi dung.
+
+    [THU VIEN] torch.tensor, torch.bool (PyTorch)
+    [TU XAY]   Logic duyet edge_index_dict va filter theo post_ids_to_mask
     """
     masked = {}
     for edge_type, edge_idx in edge_index_dict.items():
@@ -134,35 +140,35 @@ def main():
 
     print(f"Evaluating splits: Total test={len(test_indices)} | Seen subreddits={len(seen_test_indices)} | Unseen subreddits={len(unseen_test_indices)}")
 
-    # ── Full-graph (transductive) inference — used for overall metrics & OOD ──
+    # ── Che do 1: Transductive inference (full graph) ───────────────────────────
+    # Test Post van con canh graph → co the nhan message tu Subreddit/User/Domain.
+    # Accuracy cao hon (shortcut subreddit van con) nhung khong phan anh kha nang that.
+    # Chi dung de so sanh noi bo, KHONG dung lam ket qua chinh trong bai bao.
     with torch.no_grad():
         (test_out_base_2, test_out_causal_2,
          test_out_base_6, test_out_causal_6, _, _, _, _) = model(data.x_dict, data.edge_index_dict)
 
-    # ── Inductive inference for in-distribution seen-test ──────────────────────
-    # Mask all Post edges for seen-test nodes so they cannot exploit the
-    # subreddit-membership shortcut that inflates transductive accuracy to ~99%.
-    # After masking, each Post is classified from its own node features only
-    # (384-d text + 512-d CLIP + 3 scalar + 64-d FastRP), giving a realistic
-    # content-based in-distribution accuracy.
-    # Mask ALL test Post edges (seen + unseen) so the seen-vs-OOD comparison uses the
-    # SAME inductive (content-only) inference mode → a methodologically fair F1-drop.
+    # ── Che do 2: Inductive inference (content-only, strict) ────────────────────
+    # Xoa tat ca canh cua test Post nodes → Post chi duoc phan loai tu feature rieng.
+    # Day la che do CHINH duoc dung trong bai bao (leak-free, honest OOD evaluation).
+    # Ca seen va unseen test deu dung cung inductive mode → so sanh F1-drop cong bang.
     print("Running inductive inference for ALL test nodes (seen + OOD, masking test Post edges)...")
     all_test_ids_set = set(int(i) for i in test_indices)
+    # [TU XAY] mask_post_edges: xoa canh, giu nguyen feature node
     inductive_edge_dict = mask_post_edges(data.edge_index_dict, all_test_ids_set)
     with torch.no_grad():
         (ind_out_base_2, ind_out_causal_2,
          ind_out_base_6, ind_out_causal_6, _, _, _, _) = model(data.x_dict, inductive_edge_dict)
 
-    # Compute comprehensive metrics (just like in 06_train_gnn.py)
+    # [THU VIEN] sklearn.metrics: accuracy_score, f1_score, roc_auc_score, confusion_matrix
+    # compute_full_metrics: nhan logits (chua softmax), tu tinh softmax/argmax ben trong.
+    # Ket luan: argmax(logits) -> 0=Fake, 1=Real
     label_names_2way = ["Fake", "Real"]
     label_names_6way = ["True", "Satire", "Misleading", "Imposter", "FalseConn", "Manipulated"]
 
-    # Choose inference mode:
-    #  - default (content-only): INDUCTIVE, all test Post edges masked -> leak-free OOD.
-    #  - GNN_OOD_TRANSDUCTIVE=1: keep graph message-passing so the model DOES see the
-    #    (reversed) subreddit confounder. Required for the confounding-shift benchmark,
-    #    where the whole point is to test robustness to the spurious subreddit.
+    # Chon che do inference:
+    #  - DEFAULT (inductive/content-only): canh test Post bi xoa -> leak-free OOD.
+    #  - GNN_OOD_TRANSDUCTIVE=1: giu canh graph -> model van thay confounder subreddit.
     transductive = os.environ.get("GNN_OOD_TRANSDUCTIVE", "0") == "1"
     if transductive:
         eb2, ec2, eb6, ec6 = test_out_base_2, test_out_causal_2, test_out_base_6, test_out_causal_6

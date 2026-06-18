@@ -99,21 +99,36 @@ CLIP_DIM = 512
 
 # ===================== GRADIENT REVERSAL LAYER =====================
 
+# ---- GRL: Gradient Reversal Layer ----
+# [TU XAY] Khong co san trong bat ky thu vien nao.
+# Dung torch.autograd.Function de hook vao backward pass.
+#
+# Cach hoat dong:
+#   Forward:  f(x) = x             (identity, khong lam gi)
+#   Backward: grad -> -alpha * grad  (dao dau gradient, nhan voi alpha)
+#
+# Muc dich: Ep encoder hoc cach XOA tin hieu subreddit khoi h_causal.
+#   - Confounder Classifier co gang doan subreddit tu h_causal (gradient tot)
+#   - GRL dao nguoc gradient truoc khi truyen len encoder
+#   - Encoder nhan "tin hieu nguoc" -> bi ep khong cho h_causal chua info subreddit
+#
+# Day la minimax game: max_encoder min_clf [L_task - alpha * L_adv]
 class GradientReversal(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, alpha):
         ctx.alpha = alpha
-        return x.view_as(x)
+        return x.view_as(x)   # identity: pass-through, khong thay doi gi
 
     @staticmethod
     def backward(ctx, grad_output):
+        # Dao dau gradient va nhan voi alpha truoc khi tra ve encoder
         return grad_output.neg() * ctx.alpha, None
 
 
 class GRL(nn.Module):
     def __init__(self, alpha=1.0):
         super().__init__()
-        self.alpha = alpha
+        self.alpha = alpha   # alpha=2.0 theo config: do manh cua adversarial pressure
 
     def forward(self, x):
         return GradientReversal.apply(x, self.alpha)
@@ -141,12 +156,12 @@ class CausalHeteroGNN(nn.Module):
                  user_feat_dim=4, domain_feat_dim=3, post_feat_dim=451,
                  grl_alpha=2.0, edge_dropout=0.0, causal_cut=True, autocut=False):
         super().__init__()
-        self.hidden_channels = hidden_channels
-        self.dropout = nn.Dropout(p=dropout)
+        self.hidden_channels = hidden_channels   # d=96 (chieu embedding an)
+        self.dropout = nn.Dropout(p=dropout)     # [THU VIEN] PyTorch nn.Dropout
         self.edge_dropout = edge_dropout
-        # Backdoor adjustment: the causal branch encodes on a graph where the
-        # Subreddit confounder node is isolated (all edges touching Subreddit removed),
-        # so the causal representation cannot use the spurious subreddit shortcut.
+        # Backdoor adjustment (do-calculus): nhanh causal encode tren do thi
+        # da cat bo tat ca canh lien quan den Subreddit (confounder).
+        # Ket qua: h_causal khong the dung "shortcut" subreddit de phan loai.
         self.causal_cut = causal_cut
         # AutoCut: learnable per-relation gates in the causal branch — the model
         # DISCOVERS which relation types to block instead of being told.
@@ -162,53 +177,75 @@ class CausalHeteroGNN(nn.Module):
         # (vd {"posted_in","member_of"}); cạnh rev_* cùng quan hệ bị cắt theo.
         self.cut_relations = None
 
-        # Feature projection — dimensions set at runtime based on available features
-        # post_feat_dim = text_emb + fastrp(64) + scalar(3); varies with text encoder
-        # (MiniLM 384 -> 451, mpnet 768 -> 835)
+        # ---- Feature Projection ----
+        # [THU VIEN] nn.Linear (PyTorch fully-connected layer)
+        # Moi node type co so chieu feature khac nhau (Post: 771, User: 4, Image: 512...).
+        # Truoc khi vao GraphSAGE, tat ca duoc chieu (project) xuong cung 1 khong gian hidden=96.
+        # Viec dung Linear rieng cho tung node type la dac trung cua Heterogeneous GNN.
+        # post_feat_dim = text_emb(768) + scalar(3) = 771 (default, khong dung FastRP)
         self.proj = nn.ModuleDict({
-            "Post":      nn.Linear(post_feat_dim,  hidden_channels),
-            "User":      nn.Linear(user_feat_dim,  hidden_channels),
-            "Subreddit": nn.Linear(3,              hidden_channels),
-            "Domain":    nn.Linear(domain_feat_dim, hidden_channels),
-            "Image":     nn.Linear(CLIP_DIM,       hidden_channels),
+            "Post":      nn.Linear(post_feat_dim,  hidden_channels),  # 771 -> 96
+            "User":      nn.Linear(user_feat_dim,  hidden_channels),  # 4   -> 96
+            "Subreddit": nn.Linear(3,              hidden_channels),  # 3   -> 96
+            "Domain":    nn.Linear(domain_feat_dim, hidden_channels), # 3   -> 96
+            "Image":     nn.Linear(CLIP_DIM,       hidden_channels),  # 512 -> 96
         })
 
-        # HeteroConv layers (tự động dùng metadata từ HeteroData)
+        # ---- GraphSAGE Encoder (2 lop) ----
+        # [THU VIEN] SAGEConv tu torch_geometric.nn — GraphSAGE convolution chuan.
+        # [THU VIEN] HeteroConv — wrapper cua PyG cho heterogeneous graph:
+        #   tu dong dispatch dung SAGEConv theo edge type (Post->User khac User->Subreddit).
+        # conv1 va conv2 DUNG CHUNG TRONG SO giua nhanh G va G_causal
+        # (ca hai deu goi self.conv1, self.conv2 — khop voi "shared encoder" trong Hinh 2).
         def make_conv_dict():
             return {
                 edge_type: SAGEConv(hidden_channels, hidden_channels)
                 for edge_type in metadata[1]
             }
 
-        self.conv1 = HeteroConv(make_conv_dict(), aggr="sum")
-        self.conv2 = HeteroConv(make_conv_dict(), aggr="sum")
+        self.conv1 = HeteroConv(make_conv_dict(), aggr="sum")  # lop GraphSAGE 1
+        self.conv2 = HeteroConv(make_conv_dict(), aggr="sum")  # lop GraphSAGE 2
 
-        # Causal / Spurious disentanglement heads
+        # ---- Causal / Spurious Disentanglement Heads ----
+        # [THU VIEN] nn.Sequential, nn.Linear, nn.ReLU, nn.Dropout (PyTorch)
+        # [TU XAY]  Kien truc 2-lop MLP va cach ket noi 4 classifier song song
+        #
+        # mlp(in, out): Linear(in->in) + ReLU + Dropout + Linear(in->out)
+        # Day la BO PHAN LOAI — mot ham toan hoc, khong phai do thi hay Neo4j object.
+        # Input: vector h_causal (96-d) | Output: logits (2-d hoac 6-d)
         def mlp(in_dim, out_dim, dropout_p=dropout):
             return nn.Sequential(
-                nn.Linear(in_dim, in_dim),
-                nn.ReLU(),
-                nn.Dropout(p=dropout_p),
-                nn.Linear(in_dim, out_dim),
+                nn.Linear(in_dim, in_dim),    # W1 (96x96): fully-connected layer 1
+                nn.ReLU(),                     # kich hoat phi tuyen
+                nn.Dropout(p=dropout_p),       # regularization: tat ngau nhien 40% neuron
+                nn.Linear(in_dim, out_dim),    # W2 (96x2 hoac 96x6): dau ra logits
             )
 
+        # Hai dau bien doi bieu dien: causal head va spurious head
+        # (tuong ung voi "h_causal" va "h_spurious" trong Hinh 2)
         self.causal_head   = mlp(hidden_channels, hidden_channels)
         self.spurious_head = mlp(hidden_channels, hidden_channels)
 
-        # Confounder adversarial classifier (predict subreddit ID)
+        # Confounder adversarial classifier: doan subreddit ID tu h_spurious hoac h_causal+GRL.
+        # Khi ket hop voi GRL: encoder bi ep xoa tin hieu subreddit khoi h_causal.
         self.confounder_clf = nn.Sequential(
-            nn.Linear(hidden_channels, hidden_channels // 2),
+            nn.Linear(hidden_channels, hidden_channels // 2),  # 96 -> 48
             nn.ReLU(),
             nn.Dropout(p=dropout),
-            nn.Linear(hidden_channels // 2, num_subreddits),
+            nn.Linear(hidden_channels // 2, num_subreddits),   # 48 -> n_subreddit
         )
-        self.grl = GRL(alpha=grl_alpha)
+        self.grl = GRL(alpha=grl_alpha)   # GRL voi alpha=2.0 (do manh adversarial)
 
-        # 2-way classifiers
-        self.baseline_clf_2way = mlp(hidden_channels, 2)
-        self.causal_clf_2way   = mlp(hidden_channels, 2)
+        # ---- Bo Phan Loai Chinh (Classifier) ----
+        # "Classifier" trong bai chinh la cac MLP nay: nhan embedding Post
+        # (96-d) sau GraphSAGE va tra ve logits.
+        # - 2-way: out_dim=2 tuong ung [Fake, Real]  (bai toan chinh)
+        # - 6-way: out_dim=6 tuong ung 6 loai tin gia (bai toan phu)
+        # Day KHONG PHAI mot do thi hay Neo4j object — chi la ham tuyen tinh.
+        self.baseline_clf_2way = mlp(hidden_channels, 2)   # baseline: full graph
+        self.causal_clf_2way   = mlp(hidden_channels, 2)   # CHINH: causal graph, DAU RA Y_HAT
 
-        # 6-way classifiers
+        # 6-way classifiers (phan loai chi tiet hon: Satire, Misleading, Imposter...)
         self.baseline_clf_6way = mlp(hidden_channels, 6)
         self.causal_clf_6way   = mlp(hidden_channels, 6)
 
@@ -285,34 +322,55 @@ class CausalHeteroGNN(nn.Module):
         return h2
 
     def forward(self, x_dict, edge_index_dict):
-        # Baseline branch: full graph (sees the Subreddit confounder).
-        h_full = self.encode(x_dict, edge_index_dict)
-        h_post = h_full["Post"]
+        # ============================================================
+        # FORWARD PASS — Tuong ung voi toan bo Hinh 2 (Architecture Figure)
+        # ============================================================
 
-        # Causal branch: graph with the Subreddit confounder isolated (backdoor cut),
-        # hoặc AutoCut — cổng học được trên từng loại quan hệ (tự khám phá confounder).
+        # --- Nhanh 1: G day du (Baseline Branch) ---
+        # Encode tren do thi DAY DU, bao gom ca canh Subreddit.
+        # h_post se mang ca tin hieu nhan qua lan tin hieu nhieu (subreddit shortcut).
+        h_full = self.encode(x_dict, edge_index_dict)
+        h_post = h_full["Post"]   # (N_post, 96) — embedding Post tu G day du
+
+        # --- Nhanh 2: G_causal (Causal Branch) ---
+        # Encode tren do thi DA CAT canh Subreddit (backdoor adjustment do-calculus).
+        # h_post_caus chi mang tin hieu nhan qua: content, domain, image.
         if self.cut_relations is not None:
+            # AutoCut v2: cat theo ten quan he (tu xac dinh, khong hardcode Subreddit)
             h_caus = self.encode(x_dict, self._cut_relation_edges(edge_index_dict))
             h_post_caus = h_caus["Post"]
         elif self.autocut:
+            # AutoCut: cong hoc duoc per-relation (thay vi cat cung)
             h_caus = self.encode_gated(x_dict, edge_index_dict)
             h_post_caus = h_caus["Post"]
         elif self.causal_cut:
+            # DEFAULT: cat cung tat ca canh lien quan Subreddit (bien nay nhieu/confounder)
             h_caus = self.encode(x_dict, self._cut_confounder_edges(edge_index_dict))
             h_post_caus = h_caus["Post"]
         else:
+            # Ablation: khong cat gi ca (baseline thu nghiem)
             h_post_caus = h_post
 
-        h_c = self.causal_head(h_post_caus)
-        h_s = self.spurious_head(h_post)
+        # --- Bien doi bieu dien ---
+        # h_c[i] va h_s[i] mo ta CUNG mot Post i, chi khac do thi message passing.
+        # h_c: bieu dien nhan qua — dung de phan loai Fake/Real chinh thuc
+        # h_s: bieu dien phu — dung de adversarial training voi Confounder Classifier
+        h_c = self.causal_head(h_post_caus)   # (N_post, 96) — causal representation
+        h_s = self.spurious_head(h_post)       # (N_post, 96) — spurious representation
 
-        pred_base_2   = self.baseline_clf_2way(h_post)
-        pred_causal_2 = self.causal_clf_2way(h_c)
-        pred_base_6   = self.baseline_clf_6way(h_post)
-        pred_causal_6 = self.causal_clf_6way(h_c)
+        # --- Bo phan loai (Classifiers) ---
+        # Tra ve raw logits (chua softmax). Khi train: dung cross_entropy(logits, label).
+        # Khi test: argmax(logits) -> 0=Fake, 1=Real.
+        pred_base_2   = self.baseline_clf_2way(h_post)  # Baseline 2-way (Fake/Real)
+        pred_causal_2 = self.causal_clf_2way(h_c)       # CHINH: Causal 2-way -> y_hat
+        pred_base_6   = self.baseline_clf_6way(h_post)  # Baseline 6-way
+        pred_causal_6 = self.causal_clf_6way(h_c)       # Causal 6-way
 
+        # --- Adversarial Confounder Classifier ---
+        # h_s -> confounder_clf: khuyến khích dự đoán subreddit đúng (L_spurious)
+        # h_c -> GRL -> confounder_clf: encoder bị ép XÓA tín hiệu subreddit (L_adv)
         sub_pred_spurious = self.confounder_clf(h_s)
-        sub_pred_causal   = self.confounder_clf(self.grl(h_c))
+        sub_pred_causal   = self.confounder_clf(self.grl(h_c))  # GRL dao nguoc gradient
 
         return (pred_base_2, pred_causal_2,
                 pred_base_6, pred_causal_6,
@@ -324,6 +382,9 @@ class CausalHeteroGNN(nn.Module):
 
 def build_heterodata():
     print("Đọc enriched datasets...")
+    # Bước này là cầu nối giữa "đồ thị trong CSV/Neo4j" và "đồ thị tensor cho GNN".
+    # Neo4j dùng để lưu/kiểm tra/tính GDS; PyTorch Geometric cần HeteroData với
+    # x_dict (feature từng loại node) và edge_index_dict (cạnh dạng tensor).
     posts_df      = pd.read_csv(os.path.join(INPUT_DIR, "posts_enriched.csv"))
     users_df      = pd.read_csv(os.path.join(INPUT_DIR, "users_enriched.csv"))
     subreddits_df = pd.read_csv(os.path.join(INPUT_DIR, "subreddits_enriched.csv"))
@@ -363,7 +424,8 @@ def build_heterodata():
         lambda x: dom_name_map.get(str(x), "reddit.com")
     )
 
-    # Index maps
+    # Index maps: chuyển ID chuỗi trong CSV thành chỉ số nguyên liên tục.
+    # PyG edge_index chỉ hiểu chỉ số integer, ví dụ post_id "abc" -> 17.
     post_map   = {str(pid): i for i, pid in enumerate(posts_df["post_id"])}
     user_map   = {str(uid): i for i, uid in enumerate(users_df["user_id"])}
     sub_map    = {str(sid): i for i, sid in enumerate(subreddits_df["sub_id"])}
@@ -373,8 +435,12 @@ def build_heterodata():
     data = HeteroData()
 
     # ---- Node Features ----
+    # Mỗi loại node có số chiều feature khác nhau, nên trước khi GraphSAGE
+    # tất cả sẽ đi qua Linear projection riêng trong CausalHeteroGNN.proj.
 
-    # Post: text_emb(384) + fastrp(64) + [score, upvote_ratio, num_comments](3) = 451
+    # Post: text embedding + [score, upvote_ratio, num_comments].
+    # FastRP mặc định bị loại khỏi input vì được tính trên full graph và có thể
+    # rò rỉ cấu trúc test/OOD; chỉ bật bằng GNN_USE_FASTRP=1 cho ablation.
     p_scalar = posts_df[["score", "upvote_ratio", "num_comments"]].values.astype(np.float32)
     p_scalar = _min_max_norm(p_scalar)
     if USE_FASTRP:
@@ -395,7 +461,8 @@ def build_heterodata():
     data["Post"].y = torch.tensor(posts_df["label_2way"].values, dtype=torch.long)
     data["Post"].y_6way = torch.tensor(posts_df["label_6way"].values, dtype=torch.long)
 
-    # Split masks
+    # Split masks xác định node Post nào tham gia train/val/test. GNN vẫn lưu
+    # toàn bộ graph, nhưng loss chỉ tính trên train_mask và metrics trên test_mask.
     data["Post"].train_mask = torch.tensor(
         (posts_df["split"] == "train").values, dtype=torch.bool)
     data["Post"].val_mask = torch.tensor(
@@ -415,7 +482,8 @@ def build_heterodata():
         ood_vals = np.zeros(len(posts_df), dtype=bool)
     data["Post"].ood_mask = torch.tensor(ood_vals, dtype=torch.bool)
 
-    # Subreddit index per post (cho confounder classifier)
+    # Subreddit index per post (cho confounder classifier). Đây là nhãn phụ để
+    # adversarial head cố đoán community; GRL sẽ ép h_causal khó mang tín hiệu này.
     post_to_sub_id = np.zeros(len(posts_df), dtype=np.int64)
     for _, r in posted_in.iterrows():
         pi = post_map.get(str(r["post_id"]))
@@ -460,6 +528,8 @@ def build_heterodata():
     data["Image"].x = torch.tensor(image_embeddings, dtype=torch.float)
 
     # ---- Edge Indices ----
+    # edge_index có shape [2, E]: hàng 0 là chỉ số source node, hàng 1 là đích.
+    # Mỗi canonical edge type có một tensor riêng trong HeteroData.
 
     def build_edge(src_df, src_col, src_map, dst_col, dst_map):
         src = [src_map[str(x)] for x in src_df[src_col] if str(x) in src_map]
@@ -480,7 +550,8 @@ def build_heterodata():
     data["Post",   "has_image", "Image"].edge_index     = build_edge(has_image, "post_id", post_map, "img_id",    img_map)
     data["User",   "member_of", "Subreddit"].edge_index = build_edge(member_of, "user_id", user_map, "sub_id",    sub_map)
 
-    # ToUndirected tạo reverse edges tự động
+    # ToUndirected tạo reverse edges tự động để GraphSAGE có thể truyền thông điệp
+    # hai chiều, ví dụ Post->User và User->Post.
     data = T.ToUndirected()(data)
 
     return data, posts_df, subreddits_df, domains_df, post_map, sub_map, domain_map, img_map, user_feat_dim, domain_feat_dim, post_feat_dim
@@ -730,6 +801,14 @@ def main():
          h_c, h_s) = model(data.x_dict, data.edge_index_dict)
 
         # --- Losses ---
+        # [THU VIEN] F.cross_entropy: nhan raw logits, tinh -log(softmax) noi bo.
+        # Tong loss = nhiem vu chinh (Fake/Real) + nhiem vu phu (6-way)
+        #           + adversarial disentanglement + orthogonality constraint.
+        #
+        # L_total = L_base_2 + 0.5*L_base_6
+        #         + L_causal_2 + 0.5*L_causal_6
+        #         + 0.5*L_sub_spurious + 2.0*L_sub_adv
+        #         + 0.2*L_ortho
         loss_base_2    = F.cross_entropy(pred_base_2[train_mask],   y_train_2way)
         loss_base_6    = F.cross_entropy(pred_base_6[train_mask],   y_train_6way,
                                           weight=weights_6way)
@@ -749,11 +828,15 @@ def main():
         loss_causal_6  = F.cross_entropy(pred_causal_6[train_mask], y_train_6way,
                                           weight=weights_6way)
 
+        # L_spurious: h_spurious duoc khuyen khich doan dung subreddit.
+        # L_adv: h_causal qua GRL -> encoder bi ep XOA tin hieu subreddit (adversarial).
         sub_labels        = data["Post"].sub_id[train_mask]
         loss_sub_spurious = F.cross_entropy(sub_pred_spurious[train_mask], sub_labels)
         loss_sub_adv      = F.cross_entropy(sub_pred_causal[train_mask],   sub_labels)
 
-        # Orthogonality loss: causal và spurious head không overlap
+        # L_ortho: phat truong hop h_causal va h_spurious giong nhau (cosine~1).
+        # Muc dich: ep 2 bieu dien hoc thong tin KHAC NHAU, tranh lap (waste capacity).
+        # [THU VIEN] F.cosine_similarity: cosine(u, v) = dot(u,v) / (||u|| * ||v||)
         loss_ortho = torch.mean(torch.abs(
             F.cosine_similarity(h_c[train_mask], h_s[train_mask])
         ))

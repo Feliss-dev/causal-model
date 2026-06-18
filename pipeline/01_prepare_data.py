@@ -1,7 +1,22 @@
 """
 01_prepare_data.py
 ==================
-Chuẩn bị dữ liệu Fakeddit cho pipeline Causal GNN.
+BƯỚC 1 CỦA PIPELINE: Chuẩn bị dữ liệu Fakeddit cho Causal GNN.
+
+Luồng xử lý chính:
+  TSV thô (614k dòng) → Lọc bài có ảnh → Tách OOD subreddits
+  → Balanced sampling (2500+2500 train, 200+200 val, ...)
+  → Tải ảnh song song (ThreadPool)
+  → Trích xuất CLIP embedding 512-d cho từng ảnh
+  → Encode tiêu đề bài bằng SentenceTransformer 768-d
+  → Tính feature thống kê (User/Subreddit/Domain) từ TRAIN-ONLY
+  → Xuất ra CSV nodes + edges (đầu vào cho bước 02)
+
+Đầu ra:
+  data/processed/posts.csv, users.csv, subreddits.csv, domains.csv, images.csv
+  data/processed/posted_by.csv, posted_in.csv, links_to.csv, has_image.csv, member_of.csv
+  data/processed/post_embeddings.npy   (N, 768) — text features
+  data/processed/image_embeddings.npy  (N, 512) — CLIP image features
 
 Thay đổi so với phiên bản cũ:
 - Tính feature THỰC từ dữ liệu train (không mock):
@@ -42,6 +57,9 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(IMAGE_DIR, exist_ok=True)
 
 # ===================== SAMPLING CONFIG =====================
+# Balanced sampling: lay deu 2 class Fake va Real de tranh model chi doan "Real" het.
+# OOD (Out-of-Distribution) test: subreddits chua tung thay trong train,
+# dung de do kha nang tong quat hoa (generalization) cua mo hinh.
 TRAIN_PER_CLASS      = 2500   # 2500 real + 2500 fake = 5000 train
 VAL_PER_CLASS        = 200    # 200 real + 200 fake = 400 val
 SEEN_TEST_PER_CLASS  = 100    # 100 real + 100 fake = 200 seen test
@@ -121,6 +139,10 @@ def download_images_parallel(posts_df, max_workers=10):
 # ===================== CLIP EMBEDDING =====================
 
 def extract_clip_embeddings(post_ids):
+    # [THU VIEN] openai/clip-vit-base-patch32 from HuggingFace transformers
+    # CLIP (Contrastive Language-Image Pre-training) duoc pretrain tren 400M cap anh-text.
+    # Phan nay chi dung phan vision encoder de lay 512-d image feature vector.
+    # Ket qua luu vao image_embeddings.npy -> duoc dung lam feature cua Image node trong GNN.
     print("\n========== Trích xuất CLIP Image Embeddings ==========")
     try:
         import torch
@@ -281,7 +303,10 @@ def balanced_sample(df, label_col, per_class, seed=SEED):
 def create_neo4j_csvs(all_sampled_df):
     print("\nTạo file CSV cho Neo4j...")
 
-    # Tính feature thực từ train data
+    # Đây là điểm chuyển từ bảng Fakeddit phẳng sang đồ thị dị thể (HIN).
+    # Mỗi dòng post sẽ thành một node Post; các thực thể liên quan sẽ thành
+    # User/Subreddit/Domain/Image nodes; các file *_by, *_in... là edge list.
+    # Toàn bộ feature lịch sử được tính từ TRAIN split để val/test không rò nhãn.
     user_agg, sub_agg, domain_agg, defaults, member_activity_map = \
         compute_real_features(all_sampled_df)
 
@@ -291,7 +316,8 @@ def create_neo4j_csvs(all_sampled_df):
 
     # --- NODES ---
 
-    # 1. Post
+    # 1. Post: node trung tâm cần phân loại. Label được giữ ở Post để train/test;
+    # các node khác không có label phân loại Fake/Real.
     posts = pd.DataFrame({
         "post_id":       df["id"],
         "title":         df["clean_title"].fillna(df["title"]),
@@ -306,7 +332,8 @@ def create_neo4j_csvs(all_sampled_df):
     })
     posts.to_csv(os.path.join(OUTPUT_DIR, "posts.csv"), index=False)
 
-    # 2. User (feature thực)
+    # 2. User: node ngữ cảnh người đăng. Nếu user chỉ xuất hiện ở val/test,
+    # dùng default trung tính thay vì tính thống kê trên toàn bộ dữ liệu.
     user_feat_map = user_agg.set_index("author")
     unique_users  = df["author"].unique()
     users_rows    = []
@@ -334,7 +361,8 @@ def create_neo4j_csvs(all_sampled_df):
     users = pd.DataFrame(users_rows)
     users.to_csv(os.path.join(OUTPUT_DIR, "users.csv"), index=False)
 
-    # 3. Subreddit (feature thực)
+    # 3. Subreddit: node cộng đồng. Đây là confounder chính trong mô hình
+    # nhân quả, nên feature cũng phải train-only để tránh học trực tiếp nhãn test.
     sub_feat_map    = sub_agg.set_index("subreddit")
     unique_subs     = df["subreddit"].unique()
     subreddits_rows = []
@@ -360,7 +388,8 @@ def create_neo4j_csvs(all_sampled_df):
     subreddits = pd.DataFrame(subreddits_rows)
     subreddits.to_csv(os.path.join(OUTPUT_DIR, "subreddits.csv"), index=False)
 
-    # 4. Domain (feature thực)
+    # 4. Domain: node nguồn tin/lien kết. fake_ratio_real là lịch sử nguồn
+    # tính từ train, không phải thông tin oracle của toàn bộ dataset.
     domain_feat_map = domain_agg.set_index("domain")
     unique_domains  = df["domain"].unique()
     domains_rows    = []
@@ -386,7 +415,8 @@ def create_neo4j_csvs(all_sampled_df):
     domains = pd.DataFrame(domains_rows)
     domains.to_csv(os.path.join(OUTPUT_DIR, "domains.csv"), index=False)
 
-    # 5. Image (chỉ metadata thực — CLIP embedding lưu riêng dưới dạng .npy)
+    # 5. Image: node ảnh chỉ lưu metadata để nối graph; vector ảnh CLIP 512-d
+    # lưu trong image_embeddings.npy và được nạp vào HeteroData ở bước train.
     images = pd.DataFrame({
         "img_id":    [f"img_{i}" for i in df["id"]],
         "post_id":   df["id"].values,
@@ -421,28 +451,29 @@ def create_neo4j_csvs(all_sampled_df):
 
     # --- EDGES ---
 
-    # 1. POSTED_BY (Post → User)
+    # 1. POSTED_BY (Post -> User): cạnh ngữ cảnh tác giả.
     posted_by = pd.DataFrame({
         "post_id": df["id"].values,
         "user_id": [f"user_{u}" for u in df["author"]],
     })
     posted_by.to_csv(os.path.join(OUTPUT_DIR, "posted_by.csv"), index=False)
 
-    # 2. POSTED_IN (Post → Subreddit)
+    # 2. POSTED_IN (Post -> Subreddit): cạnh gây shortcut mạnh nhất; trong
+    # nhánh causal, mọi cạnh chạm Subreddit sẽ bị cắt khi message passing.
     posted_in = pd.DataFrame({
         "post_id": df["id"].values,
         "sub_id":  [f"sub_{s}" for s in df["subreddit"]],
     })
     posted_in.to_csv(os.path.join(OUTPUT_DIR, "posted_in.csv"), index=False)
 
-    # 3. LINKS_TO (Post → Domain)
+    # 3. LINKS_TO (Post -> Domain): cạnh nguồn tin.
     links_to = pd.DataFrame({
         "post_id":   df["id"].values,
         "domain_id": [f"domain_{d}" for d in df["domain"]],
     })
     links_to.to_csv(os.path.join(OUTPUT_DIR, "links_to.csv"), index=False)
 
-    # 4. HAS_IMAGE (Post → Image)
+    # 4. HAS_IMAGE (Post -> Image): nối Post với node ảnh có CLIP embedding.
     has_image = pd.DataFrame({
         "post_id":    df["id"].values,
         "img_id":     [f"img_{i}" for i in df["id"]],
@@ -450,7 +481,8 @@ def create_neo4j_csvs(all_sampled_df):
     })
     has_image.to_csv(os.path.join(OUTPUT_DIR, "has_image.csv"), index=False)
 
-    # 5. MEMBER_OF (User → Subreddit) — activity_level từ train data thực
+    # 5. MEMBER_OF (User -> Subreddit): quan hệ user-hoạt động-trong-community.
+    # Cạnh này cũng bị cắt ở nhánh causal vì có Subreddit ở đích.
     member_of_rows = []
     seen_pairs = set()
     for user, sub in zip(df["author"], df["subreddit"]):

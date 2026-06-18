@@ -53,7 +53,9 @@ def check_neo4j_connection():
 def import_to_neo4j(driver):
     print("\nBắt đầu import dữ liệu vào Neo4j...")
 
-    # Đọc CSV nodes
+    # Các CSV này được tạo ở 01_prepare_data.py. Ở đây ta chỉ chuyển chúng
+    # thành property graph trong Neo4j: mỗi file node -> một label Neo4j,
+    # mỗi file edge -> một relationship type.
     posts_df      = pd.read_csv(os.path.join(INPUT_DIR, "posts.csv"))
     users_df      = pd.read_csv(os.path.join(INPUT_DIR, "users.csv"))
     subreddits_df = pd.read_csv(os.path.join(INPUT_DIR, "subreddits.csv"))
@@ -69,11 +71,13 @@ def import_to_neo4j(driver):
 
     with driver.session() as session:
 
-        # Xoá dữ liệu cũ
+        # Xoá dữ liệu cũ để mỗi lần chạy pipeline là một graph sạch, tránh
+        # quan hệ còn sót làm sai PageRank/Louvain/FastRP.
         print("Xoá dữ liệu cũ trong Neo4j...")
         session.run("MATCH (n) DETACH DELETE n")
 
-        # Tạo constraints
+        # Constraint đảm bảo ID của từng loại node là duy nhất. Nhờ vậy MERGE
+        # không tạo trùng Post/User/Subreddit/Domain/Image khi import theo batch.
         print("Tạo constraints...")
         constraints = [
             "CREATE CONSTRAINT post_id_uq IF NOT EXISTS FOR (p:Post) REQUIRE p.post_id IS UNIQUE",
@@ -90,6 +94,8 @@ def import_to_neo4j(driver):
                 tx.run(query, rows=rows[i: i + batch_size])
 
         # ---- Post ----
+        # Post là node duy nhất mang nhãn label_2way/label_6way để huấn luyện.
+        # Các label này không được dùng bởi GDS khi tính graph algorithm.
         print("Import Post nodes...")
         post_rows = [
             {
@@ -247,7 +253,18 @@ def import_to_neo4j(driver):
 
 
 def _run_gds(session, posts_df, users_df, domains_df, subreddits_df, images_df):
-    """Chạy GDS algorithms: PageRank, Louvain, Betweenness, FastRP."""
+    """
+    [THU VIEN] Neo4j Graph Data Science (GDS) plugin — cai tren Neo4j.
+    Chay 4 thuat toan do thi: PageRank, Louvain, Betweenness, FastRP.
+
+    Luu y quan trong:
+    - Day la GDS PROJECTION (phuc vu thuat toan graph phan tich), KHONG phai GNN input.
+    - GNN (buoc 05) dung CSV + HeteroData tensor, KHONG dung truc tiep Neo4j.
+    - Ket qua GDS (pagerank, community_id, betweenness) duoc luu vao CSV enriched
+      de dung cho BI dashboard va visualization, khong phai lam GNN input chinh.
+    - FastRP (64-d) duoc luu nhung bi loai khoi GNN input theo mac dinh (GNN_USE_FASTRP=0)
+      vi duoc tinh tren full graph va co the ro ri thong tin test/OOD.
+    """
     print("\nChạy Neo4j GDS algorithms...")
     try:
         # Xoá graph projection cũ nếu tồn tại
@@ -256,7 +273,8 @@ def _run_gds(session, posts_df, users_df, domains_df, subreddits_df, images_df):
         except Exception:
             pass
 
-        # Project graph (chỉ 5 node type, 5 edge type — không có Comment/CROSS_POST)
+        # Project graph cho GDS: chi giu 5 node type, 5 edge type.
+        # KHONG co Comment/CROSS_POST (da xoa o buoc 01).
         print("Project graph cho GDS...")
         session.run("""
             CALL gds.graph.project(
@@ -272,25 +290,33 @@ def _run_gds(session, posts_df, users_df, domains_df, subreddits_df, images_df):
             )
         """)
 
-        # PageRank (uy tín Domain)
+        # [THU VIEN GDS] PageRank: do muc do uy tin cua Domain node.
+        # Domain lien ket den bai fake nhieu se co pagerank thap hon (bi cac domain khac
+        # khong tro den). Ket qua ghi vao Domain.pagerank de dung trong BI dashboard.
         print("Chạy PageRank...")
         session.run("""
             CALL gds.pageRank.write('fakedditGraph', {writeProperty: 'pagerank'})
         """)
 
-        # Louvain (community detection trên Post)
+        # [THU VIEN GDS] Louvain: phat hien community (nhom bai cung chung tinh chat).
+        # Bai post cung cong dong se duoc nhom cung cluster_id.
+        # Ket qua ghi vao Post.community_id de dung trong BI dashboard.
         print("Chạy Louvain community detection...")
         session.run("""
             CALL gds.louvain.write('fakedditGraph', {writeProperty: 'community_id'})
         """)
 
-        # Betweenness Centrality (User influence)
+        # [THU VIEN GDS] Betweenness Centrality: do muc do "cat noi" cua User.
+        # User co nhieu ban be trong nhieu cong dong khac nhau se co betweenness cao.
+        # Ket qua ghi vao User.betweenness de dung trong BI dashboard (khong dung trong GNN).
         print("Chạy Betweenness Centrality...")
         session.run("""
             CALL gds.betweenness.write('fakedditGraph', {writeProperty: 'betweenness'})
         """)
 
-        # FastRP Graph Embeddings (64-dim) cho Post
+        # [THU VIEN GDS] FastRP: Random Projection embedding 64-d cho Post.
+        # Tinh tren FULL GRAPH (bao gom ca test Post) → co the ro ri thong tin OOD.
+        # Mac dinh bi loai khoi GNN input (GNN_USE_FASTRP=0). Chi dung trong BI/ablation.
         print("Chạy FastRP embeddings...")
         session.run("""
             CALL gds.fastRP.write('fakedditGraph', {

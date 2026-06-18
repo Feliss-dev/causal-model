@@ -65,6 +65,13 @@ ax.text(50, 94.2,
         ha="center", va="center", fontsize=12.5, color="#444444")
 
 # ---------- Nodes ----------
+# Các box bên dưới khớp trực tiếp với CausalHeteroGNN.forward():
+#   HeteroData Input -> x_dict/edge_index_dict
+#   G                -> encode(x_dict, edge_index_dict)
+#   G_causal         -> encode(x_dict, _cut_confounder_edges(edge_index_dict))
+#   h_spurious       -> spurious_head(h_post)
+#   h_causal         -> causal_head(h_post_caus)
+#   Classifier       -> MLP heads sinh logits Fake/Real hoặc Subreddit.
 # Input
 box(50, 86, 42, 10, C_INPUT,
     ["HeteroData Input", "(Post / User / Subreddit / Domain / Image)"], fs=15)
