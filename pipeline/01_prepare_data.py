@@ -31,6 +31,7 @@ Thay đổi so với phiên bản cũ:
 
 import os
 import sys
+import time
 import random
 import pandas as pd
 import numpy as np
@@ -103,20 +104,25 @@ HEADERS = {
 
 # ===================== IMAGE DOWNLOAD =====================
 
-def download_single_image(post_id, url):
+def download_single_image(post_id, url, retries=3, backoff=1.5):
     if not url or pd.isna(url) or not str(url).startswith("http"):
         return post_id, False
     file_path = os.path.join(IMAGE_DIR, f"{post_id}.jpg")
     if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
         return post_id, True
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=8, verify=False)
-        if response.status_code == 200:
-            with open(file_path, "wb") as f:
-                f.write(response.content)
-            return post_id, True
-    except Exception:
-        pass
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, headers=HEADERS, timeout=8, verify=False)
+            if response.status_code == 200:
+                with open(file_path, "wb") as f:
+                    f.write(response.content)
+                return post_id, True
+            if response.status_code in (404, 403, 410):
+                break  # permanent failure, no point retrying
+        except Exception:
+            pass
+        if attempt < retries - 1:
+            time.sleep(backoff * (attempt + 1))
     return post_id, False
 
 

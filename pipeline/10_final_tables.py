@@ -31,8 +31,14 @@ def agg(paths, *keys):
     return float(np.mean(vals)), float(np.std(vals)), len(vals)
 
 
-def row(name, paths, prefix=None):
+def row(name, paths, prefix=None, expected_seeds=3):
     """Trả về dict các metric chuẩn cho 1 model. prefix = key gốc trong json."""
+    if len(paths) != expected_seeds:
+        print(f"CẢNH BÁO: '{name}' có {len(paths)} file (kỳ vọng {expected_seeds}) — "
+              f"mean±std có thể bị lệch do thiếu seed hoặc file rác còn sót lại:")
+        for p in paths:
+            print(f"    {p}")
+
     def k(*keys):
         return agg(paths, *( [prefix] if prefix else [] ), *keys)
     seen_acc = k("seen", "accuracy")
@@ -107,15 +113,15 @@ def main():
     imp_std, imp_conf = [], []
     if cc_main:
         imp_std.append(row("Causal (goc, 3 seeds)", main_files, "causal"))
-        imp_std.append(row("Causal + CLIPcons", cc_main, "causal"))
-        imp_std.append(row("MLP + CLIPcons", cc_std7, "mlp"))
-        imp_std.append(row("ERM + CLIPcons", cc_std7, "erm"))
+        imp_std.append(row("Causal + CLIPcons", cc_main, "causal", expected_seeds=5))
+        imp_std.append(row("MLP + CLIPcons", cc_std7, "mlp", expected_seeds=5))
+        imp_std.append(row("ERM + CLIPcons", cc_std7, "erm", expected_seeds=5))
         out_rows["improved_standard"] = imp_std
     if cc_bd:
         imp_conf.append(row("Causal (goc, 3 seeds)", bd_files, "causal"))
-        imp_conf.append(row("Causal + CLIPcons", cc_bd, "causal"))
-        imp_conf.append(row("MLP + CLIPcons", cc_cf7, "mlp"))
-        imp_conf.append(row("ERM + CLIPcons", cc_cf7, "erm"))
+        imp_conf.append(row("Causal + CLIPcons", cc_bd, "causal", expected_seeds=5))
+        imp_conf.append(row("MLP + CLIPcons", cc_cf7, "mlp", expected_seeds=5))
+        imp_conf.append(row("ERM + CLIPcons", cc_cf7, "erm", expected_seeds=5))
         out_rows["improved_conf"] = imp_conf
 
     # ---------- AutoCut v2 discovery summary ----------

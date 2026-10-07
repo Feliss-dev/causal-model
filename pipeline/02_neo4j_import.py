@@ -293,17 +293,23 @@ def _run_gds(session, posts_df, users_df, domains_df, subreddits_df, images_df):
         # [THU VIEN GDS] PageRank: do muc do uy tin cua Domain node.
         # Domain lien ket den bai fake nhieu se co pagerank thap hon (bi cac domain khac
         # khong tro den). Ket qua ghi vao Domain.pagerank de dung trong BI dashboard.
+        # concurrency: 1 tren tat ca GDS call de dam bao ket qua deterministic
+        # giua cac lan chay tren cung 1 do thi dau vao (Louvain/Betweenness/
+        # nodeSimilarity phu thuoc thu tu xu ly khi chay da luong).
         print("Chạy PageRank...")
         session.run("""
-            CALL gds.pageRank.write('fakedditGraph', {writeProperty: 'pagerank'})
+            CALL gds.pageRank.write('fakedditGraph', {writeProperty: 'pagerank', concurrency: 1})
         """)
 
         # [THU VIEN GDS] Louvain: phat hien community (nhom bai cung chung tinh chat).
         # Bai post cung cong dong se duoc nhom cung cluster_id.
         # Ket qua ghi vao Post.community_id de dung trong BI dashboard.
+        # randomSeed + concurrency:1 de community_id on dinh giua cac lan chay.
         print("Chạy Louvain community detection...")
         session.run("""
-            CALL gds.louvain.write('fakedditGraph', {writeProperty: 'community_id'})
+            CALL gds.louvain.write('fakedditGraph', {
+              writeProperty: 'community_id', randomSeed: 42, concurrency: 1
+            })
         """)
 
         # [THU VIEN GDS] Betweenness Centrality: do muc do "cat noi" cua User.
@@ -311,17 +317,20 @@ def _run_gds(session, posts_df, users_df, domains_df, subreddits_df, images_df):
         # Ket qua ghi vao User.betweenness de dung trong BI dashboard (khong dung trong GNN).
         print("Chạy Betweenness Centrality...")
         session.run("""
-            CALL gds.betweenness.write('fakedditGraph', {writeProperty: 'betweenness'})
+            CALL gds.betweenness.write('fakedditGraph', {writeProperty: 'betweenness', concurrency: 1})
         """)
 
         # [THU VIEN GDS] FastRP: Random Projection embedding 64-d cho Post.
         # Tinh tren FULL GRAPH (bao gom ca test Post) → co the ro ri thong tin OOD.
         # Mac dinh bi loai khoi GNN input (GNN_USE_FASTRP=0). Chi dung trong BI/ablation.
+        # randomSeed de embedding on dinh giua cac lan chay (mac dinh la ngau nhien hoan toan).
         print("Chạy FastRP embeddings...")
         session.run("""
             CALL gds.fastRP.write('fakedditGraph', {
               embeddingDimension: 64,
-              writeProperty: 'graph_embedding'
+              writeProperty: 'graph_embedding',
+              randomSeed: 42,
+              concurrency: 1
             })
         """)
 
@@ -347,7 +356,8 @@ def _run_gds(session, posts_df, users_df, domains_df, subreddits_df, images_df):
                   writeRelationshipType: 'SIMILAR_TO',
                   writeProperty: 'similarity',
                   similarityCutoff: 0.1,
-                  topK: 5
+                  topK: 5,
+                  concurrency: 1
                 })
             """)
             try:

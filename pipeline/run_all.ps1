@@ -1,6 +1,11 @@
-# run_all.ps1 — Chạy tuần tự pipeline tái lập kết quả.
+﻿# run_all.ps1 — Chạy tuần tự pipeline tái lập kết quả.
 # Dùng:  powershell -File pipeline/run_all.ps1 -Phase <data|main|aggregate|dashboard|all>
 # LƯU Ý: chạy từ THƯ MỤC GỐC dự án. Phase "data" cần multimodal_*.tsv (+ Docker cho Neo4j).
+#
+# -SkipData : chỉ dùng với -Phase all — bỏ qua Phase A (01-04), chạy thẳng main+aggregate
+#             trên data/processed/ đang có sẵn. Dùng khi đã có dữ liệu (gốc hoặc khôi phục
+#             từ backup) và không muốn tải lại ảnh / resample lại dataset.
+# -Force    : bỏ qua cảnh báo resample khi data/processed/posts_enriched.csv đã tồn tại.
 #
 # Cấu trúc pipeline (12 scripts):
 #   01 prepare_data       06 evaluate
@@ -10,7 +15,7 @@
 #   05 train_gnn          10 final_tables
 #                         11 generate_figures
 #                         12 dashboard (Streamlit, optional)
-param([string]$Phase = "aggregate")
+param([string]$Phase = "aggregate", [switch]$SkipData, [switch]$Force)
 
 $ErrorActionPreference = "Stop"
 $env:PYTHONUTF8 = "1"
@@ -31,6 +36,14 @@ function Run($script) {
 switch ($Phase) {
 
   "data" {        # PHASE A — chạy 1 lần; cần file TSV + Docker/Neo4j
+    if ((Test-Path "data/processed/posts_enriched.csv") -and -not $Force) {
+      Write-Host "CẢNH BÁO: data/processed/posts_enriched.csv đã tồn tại." -ForegroundColor Yellow
+      Write-Host "Chạy lại Phase A sẽ TẢI LẠI ẢNH và RESAMPLE LẠI dataset (không deterministic" -ForegroundColor Yellow
+      Write-Host "do phụ thuộc mạng khi tải ảnh) — ghi đè dữ liệu hiện có, không thể khôi phục." -ForegroundColor Yellow
+      Write-Host "Dùng -Force để xác nhận chạy lại, hoặc dùng -Phase all -SkipData nếu chỉ" -ForegroundColor Yellow
+      Write-Host "muốn chạy lại Phase B+C trên dữ liệu đang có." -ForegroundColor Yellow
+      throw "Huỷ Phase A để tránh ghi đè dữ liệu hiện có. Thêm -Force nếu chắc chắn muốn resample."
+    }
     Clear-GnnEnv
     Run "01_prepare_data.py"
     Run "02_neo4j_import.py"
@@ -75,13 +88,18 @@ switch ($Phase) {
   }
 
   "all" {
-    foreach ($p in @("data", "main", "aggregate")) {
-      & $PSCommandPath -Phase $p
+    $phases = if ($SkipData) { @("main", "aggregate") } else { @("data", "main", "aggregate") }
+    if ($SkipData) {
+      Write-Host "-SkipData: bỏ qua Phase A, dùng data/processed/ hiện có." -ForegroundColor Cyan
+    }
+    foreach ($p in $phases) {
+      & $PSCommandPath -Phase $p -Force:$Force
     }
     Write-Host "`nPipeline hoàn tất. Chạy -Phase dashboard để xem dashboard." -ForegroundColor Green
   }
 
   default {
     Write-Host "Phase không hợp lệ. Chọn: data | main | aggregate | dashboard | all" -ForegroundColor Yellow
+    Write-Host "Cờ tuỳ chọn: -SkipData (chỉ với -Phase all, bỏ qua Phase A) | -Force (bỏ qua cảnh báo resample)" -ForegroundColor Yellow
   }
 }
