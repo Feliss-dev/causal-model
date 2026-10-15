@@ -1,0 +1,36 @@
+--dataset politifact --feature bert --model root_mlp
+--dataset politifact --feature bert --model stats_mlp
+--dataset politifact --feature bert --model gcn
+--dataset politifact --feature bert --model sage
+--dataset politifact --feature bert --model gat
+--dataset politifact --feature profile --model root_mlp
+--dataset politifact --feature profile --model gcn
+--dataset politifact --feature profile --model sage
+--dataset politifact --feature profile --model gat
+--dataset gossipcop --feature bert --model root_mlp
+--dataset gossipcop --feature bert --model stats_mlp
+--dataset gossipcop --feature bert --model gcn
+--dataset gossipcop --feature bert --model sage
+--dataset gossipcop --feature bert --model gat
+--dataset gossipcop --feature profile --model root_mlp
+--dataset gossipcop --feature profile --model gcn
+--dataset gossipcop --feature profile --model sage
+--dataset gossipcop --feature profile --model gat
+--dataset politifact --split temporal --model root_mlp
+--dataset politifact --split temporal --model sage
+--dataset politifact --split temporal --model causal
+--dataset politifact --split temporal --model causal --adv_conditional
+--dataset gossipcop --split temporal --model root_mlp
+--dataset gossipcop --split temporal --model sage
+--dataset gossipcop --split temporal --model causal
+--dataset gossipcop --split temporal --model causal --adv_conditional
+--dataset gossipcop --test_dataset politifact --model root_mlp
+--dataset gossipcop --test_dataset politifact --model stats_mlp
+--dataset gossipcop --test_dataset politifact --model sage
+--dataset gossipcop --test_dataset politifact --model causal
+--dataset gossipcop --test_dataset politifact --model causal --adv_conditional
+--dataset politifact --test_dataset gossipcop --model root_mlp
+--dataset politifact --test_dataset gossipcop --model stats_mlp
+--dataset politifact --test_dataset gossipcop --model sage
+--dataset politifact --test_dataset gossipcop --model causal
+--dataset politifact --test_dataset gossipcop --model causal --adv_conditional

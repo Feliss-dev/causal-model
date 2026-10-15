@@ -1,0 +1,14 @@
+--dataset politifact --model irm
+--dataset politifact --model eerm
+--dataset politifact --model causal --adv_conditional
+--dataset gossipcop --model irm
+--dataset gossipcop --model eerm
+--dataset gossipcop --model causal --adv_conditional
+--dataset politifact --split temporal --model irm
+--dataset politifact --split temporal --model eerm
+--dataset gossipcop --split temporal --model irm
+--dataset gossipcop --split temporal --model eerm
+--dataset gossipcop --test_dataset politifact --model irm
+--dataset gossipcop --test_dataset politifact --model eerm
+--dataset politifact --test_dataset gossipcop --model irm
+--dataset politifact --test_dataset gossipcop --model eerm

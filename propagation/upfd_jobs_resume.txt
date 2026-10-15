@@ -1,0 +1,5 @@
+--dataset gossipcop --split temporal --model eerm --seeds 4
+--dataset gossipcop --test_dataset politifact --model irm --seeds 2 3 4
+--dataset gossipcop --test_dataset politifact --model eerm
+--dataset politifact --test_dataset gossipcop --model irm
+--dataset politifact --test_dataset gossipcop --model eerm

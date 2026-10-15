@@ -35,3 +35,7 @@ neo4j/data/
 neo4j/logs/
 neo4j/plugins/
 neo4j/import/
+
+# Third-party datasets (download/extract locally — see pipeline/14_mediaeval_graph.py, propagation/01_prepare_upfd.py)
+data/mediaeval2015/
+data/upfd/

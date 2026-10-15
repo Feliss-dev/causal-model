@@ -154,8 +154,13 @@ class CausalHeteroGNN(nn.Module):
 
     def __init__(self, metadata, hidden_channels=64, num_subreddits=100, dropout=0.3,
                  user_feat_dim=4, domain_feat_dim=3, post_feat_dim=451,
-                 grl_alpha=2.0, edge_dropout=0.0, causal_cut=True, autocut=False):
+                 grl_alpha=2.0, edge_dropout=0.0, causal_cut=True, autocut=False,
+                 node_feat_dims=None, confounder_type="Subreddit", target_type="Post"):
         super().__init__()
+        # node_feat_dims / confounder_type / target_type: cho phép dùng lại kiến trúc
+        # trên đồ thị khác (vd MediaEval: Tweet/User/Image/Event). Mặc định = Fakeddit.
+        self.confounder_type = confounder_type
+        self.target_type = target_type
         self.hidden_channels = hidden_channels   # d=96 (chieu embedding an)
         self.dropout = nn.Dropout(p=dropout)     # [THU VIEN] PyTorch nn.Dropout
         self.edge_dropout = edge_dropout
@@ -183,12 +188,16 @@ class CausalHeteroGNN(nn.Module):
         # Truoc khi vao GraphSAGE, tat ca duoc chieu (project) xuong cung 1 khong gian hidden=96.
         # Viec dung Linear rieng cho tung node type la dac trung cua Heterogeneous GNN.
         # post_feat_dim = text_emb(768) + scalar(3) = 771 (default, khong dung FastRP)
+        if node_feat_dims is None:
+            node_feat_dims = {
+                "Post":      post_feat_dim,    # 771 -> 96
+                "User":      user_feat_dim,    # 4   -> 96
+                "Subreddit": 3,                # 3   -> 96
+                "Domain":    domain_feat_dim,  # 3   -> 96
+                "Image":     CLIP_DIM,         # 512 -> 96
+            }
         self.proj = nn.ModuleDict({
-            "Post":      nn.Linear(post_feat_dim,  hidden_channels),  # 771 -> 96
-            "User":      nn.Linear(user_feat_dim,  hidden_channels),  # 4   -> 96
-            "Subreddit": nn.Linear(3,              hidden_channels),  # 3   -> 96
-            "Domain":    nn.Linear(domain_feat_dim, hidden_channels), # 3   -> 96
-            "Image":     nn.Linear(CLIP_DIM,       hidden_channels),  # 512 -> 96
+            k: nn.Linear(d, hidden_channels) for k, d in node_feat_dims.items()
         })
 
         # ---- GraphSAGE Encoder (2 lop) ----
@@ -261,11 +270,11 @@ class CausalHeteroGNN(nn.Module):
             out[k] = ei2
         return out
 
-    @staticmethod
-    def _cut_confounder_edges(edge_index_dict):
-        """Remove every edge incident on the Subreddit node (backdoor cut)."""
+    def _cut_confounder_edges(self, edge_index_dict):
+        """Remove every edge incident on the confounder node type (backdoor cut)."""
+        c = self.confounder_type
         return {k: v for k, v in edge_index_dict.items()
-                if k[0] != "Subreddit" and k[2] != "Subreddit"}
+                if k[0] != c and k[2] != c}
 
     def _cut_relation_edges(self, edge_index_dict):
         """Cắt theo tên quan hệ (AutoCut v2). 'posted_in' cắt cả 'rev_posted_in'."""
@@ -330,7 +339,7 @@ class CausalHeteroGNN(nn.Module):
         # Encode tren do thi DAY DU, bao gom ca canh Subreddit.
         # h_post se mang ca tin hieu nhan qua lan tin hieu nhieu (subreddit shortcut).
         h_full = self.encode(x_dict, edge_index_dict)
-        h_post = h_full["Post"]   # (N_post, 96) — embedding Post tu G day du
+        h_post = h_full[self.target_type]   # (N_post, 96) — embedding Post tu G day du
 
         # --- Nhanh 2: G_causal (Causal Branch) ---
         # Encode tren do thi DA CAT canh Subreddit (backdoor adjustment do-calculus).
@@ -338,15 +347,15 @@ class CausalHeteroGNN(nn.Module):
         if self.cut_relations is not None:
             # AutoCut v2: cat theo ten quan he (tu xac dinh, khong hardcode Subreddit)
             h_caus = self.encode(x_dict, self._cut_relation_edges(edge_index_dict))
-            h_post_caus = h_caus["Post"]
+            h_post_caus = h_caus[self.target_type]
         elif self.autocut:
             # AutoCut: cong hoc duoc per-relation (thay vi cat cung)
             h_caus = self.encode_gated(x_dict, edge_index_dict)
-            h_post_caus = h_caus["Post"]
+            h_post_caus = h_caus[self.target_type]
         elif self.causal_cut:
             # DEFAULT: cat cung tat ca canh lien quan Subreddit (bien nay nhieu/confounder)
             h_caus = self.encode(x_dict, self._cut_confounder_edges(edge_index_dict))
-            h_post_caus = h_caus["Post"]
+            h_post_caus = h_caus[self.target_type]
         else:
             # Ablation: khong cat gi ca (baseline thu nghiem)
             h_post_caus = h_post
